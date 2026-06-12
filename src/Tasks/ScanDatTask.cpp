@@ -84,13 +84,20 @@ namespace gw2b {
     ScanDatTask::ScanDatTask( const std::shared_ptr<DatIndex>& p_index, DatFile& p_datFile )
         : m_index( p_index )
         , m_datFile( p_datFile )
-        , m_batchSize( 0 )
-        , m_batchUpdateActive( false ) {
+        , m_scanStart( 0 )
+        , m_scanEnd( 0 )
+        , m_batchUpdateActive( false )
+        , m_workerStarted( false )
+        , m_scanProgress( 0 )
+        , m_workerDone( false )
+        , m_abortRequested( false ) {
         Ensure::notNull( p_index.get( ) );
         Ensure::notNull( &p_datFile );
     }
 
     ScanDatTask::~ScanDatTask( ) {
+        m_abortRequested = true;
+        this->joinWorker( );
         this->endBatchUpdateIfNeeded( );
     }
 
@@ -101,14 +108,9 @@ namespace gw2b {
         uint filesLeft = m_datFile.numFiles( ) - ( m_index->highestMftEntry( ) + 1 );
         m_index->reserveEntries( filesLeft );
 
-        int threads = omp_get_max_threads( );
-        if ( threads < 1 ) {
-            threads = 1;
-        }
-        m_batchSize = static_cast<uint>( threads ) * 64;
-        if ( m_batchSize < 256 ) {
-            m_batchSize = 256;
-        }
+        m_scanStart = this->currentProgress( );
+        m_scanEnd = this->maxProgress( );
+        m_scanProgress = m_scanStart;
 
         m_index->beginBatchUpdate( );
         m_batchUpdateActive = true;
@@ -117,7 +119,15 @@ namespace gw2b {
     }
 
     void ScanDatTask::abort( ) {
+        m_abortRequested = true;
+        this->joinWorker( );
         this->endBatchUpdateIfNeeded( );
+    }
+
+    void ScanDatTask::joinWorker( ) {
+        if ( m_worker.joinable( ) ) {
+            m_worker.join( );
+        }
     }
 
     void ScanDatTask::endBatchUpdateIfNeeded( ) {
@@ -128,16 +138,42 @@ namespace gw2b {
     }
 
     void ScanDatTask::perform( ) {
-        const uint batchStart = this->currentProgress( );
-        const uint batchEnd = wxMin( batchStart + m_batchSize, this->maxProgress( ) );
-        const uint batchCount = batchEnd - batchStart;
-
-        if ( batchCount == 0 ) {
+        if ( m_scanStart >= m_scanEnd ) {
             this->endBatchUpdateIfNeeded( );
             return;
         }
 
-        std::vector<ScanResult> results( batchCount );
+        if ( !m_workerStarted ) {
+            m_workerStarted = true;
+            m_worker = std::thread( &ScanDatTask::runScan, this );
+            return;
+        }
+
+        const uint progress = m_scanProgress.load( );
+        this->setText( wxString::Format( wxT( "Scanning .dat: %d/%d" ), progress, this->maxProgress( ) ) );
+        this->setCurrentProgress( progress );
+
+        if ( !m_workerDone.load( ) ) {
+            return;
+        }
+
+        this->joinWorker( );
+        this->setCurrentProgress( m_scanEnd );
+        this->setText( wxString::Format( wxT( "Scanning .dat: %d/%d" ), m_scanEnd, this->maxProgress( ) ) );
+        this->endBatchUpdateIfNeeded( );
+    }
+
+    void ScanDatTask::runScan( ) {
+        const uint start = m_scanStart;
+        const uint end = m_scanEnd;
+        const uint count = end - start;
+
+        if ( count == 0 || m_abortRequested.load( ) ) {
+            m_workerDone = true;
+            return;
+        }
+
+        std::vector<ScanResult> results( count );
 
 #pragma omp parallel
         {
@@ -146,25 +182,31 @@ namespace gw2b {
             Array<byte> buffer( 32 );
 
 #pragma omp for schedule( dynamic )
-            for ( int i = 0; i < static_cast<int>( batchCount ); i++ ) {
+            for ( int i = 0; i < static_cast<int>( count ); i++ ) {
+                if ( m_abortRequested.load( ) ) {
+                    continue;
+                }
+
                 if ( contextReady ) {
-                    results[i] = this->scanEntry( batchStart + i, context, buffer );
+                    results[i] = this->scanEntry( start + i, context, buffer );
                 } else {
                     results[i].valid = false;
+                }
+
+                if ( ( i & 0x3FF ) == 0 ) {
+                    m_scanProgress.store( start + i );
                 }
             }
         }
 
-        for ( uint i = 0; i < batchCount; i++ ) {
-            this->commitResult( results[i] );
+        if ( !m_abortRequested.load( ) ) {
+            for ( uint i = 0; i < count; i++ ) {
+                this->commitResult( results[i] );
+            }
+            m_scanProgress.store( end );
         }
 
-        this->setText( wxString::Format( wxT( "Scanning .dat: %d/%d" ), batchEnd, this->maxProgress( ) ) );
-        this->setCurrentProgress( batchEnd );
-
-        if ( this->isDone( ) ) {
-            this->endBatchUpdateIfNeeded( );
-        }
+        m_workerDone = true;
     }
 
     ScanDatTask::ScanResult ScanDatTask::scanEntry( uint p_entryNumber, DatFile::ThreadContext& p_context, Array<byte>& p_buffer ) {

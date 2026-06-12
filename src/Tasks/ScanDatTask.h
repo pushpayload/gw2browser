@@ -28,6 +28,8 @@
 #ifndef TASKS_SCANDATTASK_H_INCLUDED
 #define TASKS_SCANDATTASK_H_INCLUDED
 
+#include <atomic>
+#include <thread>
 #include <vector>
 
 #include "ANetStructs.h"
@@ -51,8 +53,14 @@ namespace gw2b {
 
         std::shared_ptr<DatIndex>   m_index;
         DatFile&                    m_datFile;
-        uint                        m_batchSize;
+        uint                        m_scanStart;
+        uint                        m_scanEnd;
         bool                        m_batchUpdateActive;
+        bool                        m_workerStarted;
+        std::thread                 m_worker;
+        std::atomic<uint>           m_scanProgress;
+        std::atomic<bool>           m_workerDone;
+        std::atomic<bool>           m_abortRequested;
     public:
         ScanDatTask( const std::shared_ptr<DatIndex>& p_index, DatFile& p_datFile );
         virtual ~ScanDatTask( );
@@ -68,6 +76,8 @@ namespace gw2b {
         ScanResult scanEntry( uint p_entryNumber, DatFile::ThreadContext& p_context, Array<byte>& p_buffer );
         void commitResult( const ScanResult& p_result );
         void endBatchUpdateIfNeeded( );
+        void runScan( );
+        void joinWorker( );
     }; // class ScanDatTask
 
 }; // namespace gw2b
