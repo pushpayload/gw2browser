@@ -191,6 +191,10 @@ namespace gw2b {
         /** Executed when the user clicks <em>View -> Clear Log</em> in the menu.
         *  \param[in]  p_event  Unused event object handed to us by wxWidgets. */
         void onClearLogEvt( wxCommandEvent &p_event );
+        /** Executed when the user clicks <em>File -> Compare With Index</em>.
+        *  Loads another index file and shows what changed relative to the current one.
+        *  \param[in]  p_event  Unused event object handed to us by wxWidgets. */
+        void onCompareIndexEvt( wxCommandEvent &p_event );
         /** Executed when the user close aui pane.
         *  \param[in]  p_event  Unused event object handed to us by wxWidgets. */
         void onPaneCloseEvt( wxAuiManagerEvent &p_event );

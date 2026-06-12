@@ -34,12 +34,13 @@ namespace gw2b {
 
     } // namespace
 
-    ReadIndexTask::ReadIndexTask( const std::shared_ptr<DatIndex>& p_index, const wxString& p_filename, uint64 p_datTimestamp )
+    ReadIndexTask::ReadIndexTask( const std::shared_ptr<DatIndex>& p_index, const wxString& p_filename, uint64 p_datTimestamp, uint64 p_datFingerprint )
         : m_index( p_index )
         , m_reader( *p_index )
         , m_filename( p_filename )
         , m_errorOccured( false )
         , m_datTimestamp( p_datTimestamp )
+        , m_datFingerprint( p_datFingerprint )
         , m_batchUpdateActive( false )
         , m_workerStarted( false )
         , m_ioProgress( 0 )
@@ -60,7 +61,14 @@ namespace gw2b {
 
         bool result = m_reader.open( m_filename );
         if ( result ) {
-            result = ( m_index->datTimestamp( ) == m_datTimestamp );
+            // Prefer the .dat fingerprint when the index has one (newer format):
+            // it survives file copies/moves where the modification time would not.
+            // Older indexes without a fingerprint fall back to the timestamp.
+            if ( m_index->datFingerprint( ) != 0 && m_datFingerprint != 0 ) {
+                result = ( m_index->datFingerprint( ) == m_datFingerprint );
+            } else {
+                result = ( m_index->datTimestamp( ) == m_datTimestamp );
+            }
         }
         if ( result ) {
             m_index->beginBatchUpdate( );

@@ -294,6 +294,7 @@ namespace gw2b {
     private:
         CategoryArray       m_categories;
         uint64              m_datTimestamp;
+        uint64              m_datFingerprint;
         EntryArray          m_entries;
         BaseIdMap           m_entriesByBaseId;
         int                 m_highestMftEntry;
@@ -409,6 +410,18 @@ namespace gw2b {
         *  \param[in]  p_timestamp  .dat file timestamp. */
         void setDatTimestamp( uint64 p_timestamp ) {
             m_datTimestamp = p_timestamp;
+        }
+
+        /** Gets the .dat fingerprint stored for this index. A value of 0 means
+        *   the fingerprint is unknown (e.g. an index from an older format).
+        *  \return uint64  .dat content fingerprint. */
+        uint64 datFingerprint( ) const {
+            return m_datFingerprint;
+        }
+        /** Sets the .dat fingerprint stored for this index.
+        *  \param[in]  p_fingerprint    .dat content fingerprint. */
+        void setDatFingerprint( uint64 p_fingerprint ) {
+            m_datFingerprint = p_fingerprint;
         }
 
         /** Adds an event listener to this object.

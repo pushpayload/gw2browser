@@ -38,7 +38,9 @@ namespace gw2b {
 
     enum DatIndexMagicNumber {
         DatIndex_Magic = 0x4944,
-        DatIndex_Version = 0x2,
+        DatIndex_Version = 0x3,             /**< Current index format version (written by this build). */
+        DatIndex_MinVersion = 0x2,          /**< Oldest index format version we can still read. */
+        DatIndex_VersionFingerprint = 0x3,  /**< First version to store the .dat fingerprint after the header. */
         DatIndex_RootCategory = -0x1,
     };
 

@@ -31,6 +31,7 @@ namespace gw2b {
             ID_ShowFileList,                    // Show file list window
             ID_ShowLog,                         // Show log window
             ID_ClearLog,                        // Clear the log window
+            ID_CompareIndex,                    // Compare current index with another index file
             //ID_ResetLayout,
             //ID_SetBackgroundColor,
             //ID_ShowGrid,                      // Show grid on PreviewGLCanvas

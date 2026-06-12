@@ -157,6 +157,37 @@ namespace gw2b {
         uint mftFileOffset( ) const {
             return MFT_FILE_OFFSET;
         }
+        /** Gets the byte offset to the MFT from the start of the .dat file. This
+        *   value grows with every game update and is part of the fingerprint.
+        *  \return uint64  Offset to the MFT, 0 if file not open. */
+        uint64 mftOffset( ) const {
+            if ( !this->isOpen( ) ) {
+                return 0;
+            } return m_datHead.mftOffset;
+        }
+        /** Computes a stable fingerprint of the currently open .dat that changes
+        *   with every game update. It combines the MFT offset and the number of
+        *   MFT entries, both of which grow as ArenaNet patches the .dat. This is
+        *   used to bind an index file to a specific .dat state more reliably than
+        *   a file modification time.
+        *  \return uint64  A non-zero fingerprint, or 0 if no .dat is open. */
+        uint64 fingerprint( ) const {
+            if ( !this->isOpen( ) ) {
+                return 0;
+            }
+            // FNV-1a over the MFT offset and the entry count.
+            uint64 hash = 14695981039346656037ULL;
+            auto mix = [&hash] ( uint64 p_value ) {
+                for ( int i = 0; i < 8; i++ ) {
+                    hash ^= ( p_value >> ( i * 8 ) ) & 0xFF;
+                    hash *= 1099511628211ULL;
+                }
+            };
+            mix( m_datHead.mftOffset );
+            mix( static_cast<uint64>( m_mftHead.numEntries ) );
+            // Reserve 0 as the "unknown" sentinel used by index files.
+            return hash ? hash : 1;
+        }
 
         /** Peeks at the contents of the given MFT entry and returns the results.
         *  \param[in]  p_entryNum   MFT entry number to get contents for.

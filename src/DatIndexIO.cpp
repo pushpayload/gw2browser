@@ -54,11 +54,20 @@ namespace gw2b {
             if ( m_header.magicInteger != DatIndex_Magic ) {
                 this->close( ); return false;
             }
-            if ( m_header.version != DatIndex_Version ) {
+            if ( m_header.version < DatIndex_MinVersion || m_header.version > DatIndex_Version ) {
                 this->close( ); return false;
+            }
+            // Versions at or above DatIndex_VersionFingerprint store a .dat
+            // fingerprint immediately after the fixed-width header.
+            uint64 datFingerprint = 0;
+            if ( m_header.version >= DatIndex_VersionFingerprint ) {
+                if ( m_file.Read( &datFingerprint, sizeof( datFingerprint ) ) < static_cast<ssize_t>( sizeof( datFingerprint ) ) ) {
+                    this->close( ); return false;
+                }
             }
             m_index.clear( ); // always start with a fresh index
             m_index.setDatTimestamp( m_header.datTimestamp );
+            m_index.setDatFingerprint( datFingerprint );
             m_index.reserveEntries( m_header.numEntries );
             m_index.reserveCategories( m_header.numCategories );
             return true;
@@ -180,6 +189,13 @@ namespace gw2b {
 
             auto bytesWritten = m_file.Write( &header, sizeof( header ) );
             if ( bytesWritten < sizeof( header ) ) {
+                this->close( ); return false;
+            }
+
+            // Write the .dat fingerprint right after the header (version 0x3+).
+            uint64 datFingerprint = m_index.datFingerprint( );
+            bytesWritten = m_file.Write( &datFingerprint, sizeof( datFingerprint ) );
+            if ( bytesWritten < sizeof( datFingerprint ) ) {
                 this->close( ); return false;
             }
 

@@ -44,6 +44,16 @@
 #include "Tasks/ScanDatTask.h"
 #include "Tasks/WriteIndexTask.h"
 
+#include "DatIndexIO.h"
+
+#include <wx/listctrl.h>
+#include <wx/textfile.h>
+
+#include <algorithm>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
 #include "BrowserWindow.h"
 
 namespace gw2b {
@@ -70,6 +80,8 @@ namespace gw2b {
         auto fileMenu = new wxMenu;
         wxAcceleratorEntry openAccel( wxACCEL_CTRL, 'O' );
         fileMenu->Append( wxID_OPEN, wxT( "&Open" ), wxT( "Open a file for browsing" ) )->SetAccel( &openAccel );
+        fileMenu->AppendSeparator( );
+        fileMenu->Append( ID_CompareIndex, wxT( "&Compare With Index..." ), wxT( "Compare the current index with another index file to see what changed" ) );
         fileMenu->AppendSeparator( );
         fileMenu->Append( wxID_EXIT, wxT( "E&xit\tAlt+F4" ) );
         // View menu
@@ -201,6 +213,7 @@ namespace gw2b {
         this->Bind( wxEVT_MENU, &BrowserWindow::onTogglePaneEvt, this, ID_ShowFileList );
         this->Bind( wxEVT_MENU, &BrowserWindow::onTogglePaneEvt, this, ID_ShowLog );
         this->Bind( wxEVT_MENU, &BrowserWindow::onClearLogEvt, this, ID_ClearLog );
+        this->Bind( wxEVT_MENU, &BrowserWindow::onCompareIndexEvt, this, ID_CompareIndex );
         this->Bind( wxEVT_BUTTON, &BrowserWindow::onButtonEvt, this );
         this->Bind( wxEVT_TEXT_ENTER, &BrowserWindow::onEnterPressedInSrchBoxEvt, this );
         this->Bind( wxEVT_AUI_PANE_CLOSE, &BrowserWindow::onPaneCloseEvt, this );
@@ -265,8 +278,9 @@ namespace gw2b {
 
         // Open the index file
         uint64 datTimeStamp = wxFileModificationTime( p_path );
+        uint64 datFingerprint = m_datFile.fingerprint( );
         auto indexFile = this->findDatIndex( );
-        auto readIndexTask = new ReadIndexTask( m_index, indexFile.GetFullPath( ), datTimeStamp );
+        auto readIndexTask = new ReadIndexTask( m_index, indexFile.GetFullPath( ), datTimeStamp, datFingerprint );
 
         // Start reading the index
         readIndexTask->addOnCompleteHandler( [this] ( ) { this->onReadIndexComplete( ); } );
@@ -485,6 +499,9 @@ namespace gw2b {
     //============================================================================/
 
     void BrowserWindow::indexDat( ) {
+        // Stamp the current .dat fingerprint so it is persisted when the index
+        // is written after scanning.
+        m_index->setDatFingerprint( m_datFile.fingerprint( ) );
         auto scanTask = new ScanDatTask( m_index, m_datFile );
         scanTask->addOnCompleteHandler( [this] ( ) { this->onScanTaskComplete( ); } );
         this->performTask( scanTask );
@@ -631,6 +648,245 @@ namespace gw2b {
 
     //============================================================================/
 
+    namespace {
+
+        /** Classification of a single file when diffing two indexes. */
+        enum DiffStatus {
+            DS_Added,       /**< Present in the current index, absent in the other. */
+            DS_Changed,     /**< Present in both, but the .dat content moved (different MFT entry). */
+            DS_Removed,     /**< Present in the other index, absent in the current. */
+        };
+
+        /** A single row of the comparison result. */
+        struct DiffRow {
+            DiffStatus  status;
+            uint        baseId;
+            uint        fileId;
+            uint        mftOld;
+            uint        mftNew;
+            wxString    name;
+            wxString    category;
+        };
+
+        /** Builds a stable identity key for an entry, preferring base id, then
+        *  file id, then MFT entry for id-less files. */
+        uint64 entryKey( const DatIndexEntry* p_entry ) {
+            if ( p_entry->baseId( ) ) {
+                return static_cast<uint64>( p_entry->baseId( ) );
+            }
+            if ( p_entry->fileId( ) ) {
+                return ( static_cast<uint64>( 1 ) << 40 ) | p_entry->fileId( );
+            }
+            return ( static_cast<uint64>( 1 ) << 41 ) | p_entry->mftEntry( );
+        }
+
+        /** Builds a "Parent/Child/..." path string for a category. */
+        wxString categoryPath( const DatIndexCategory* p_category ) {
+            wxString path;
+            for ( auto category = p_category; category != nullptr; category = category->parent( ) ) {
+                if ( path.IsEmpty( ) ) {
+                    path = category->name( );
+                } else {
+                    path = category->name( ) + wxT( "/" ) + path;
+                }
+            }
+            return path;
+        }
+
+    } // namespace
+
+    void BrowserWindow::onCompareIndexEvt( wxCommandEvent& WXUNUSED( p_event ) ) {
+        // The index must be fully loaded and stable to compare against.
+        if ( m_currentTask ) {
+            wxMessageBox( wxT( "Please wait for the current operation to finish before comparing." ),
+                wxT( "Compare With Index" ), wxOK | wxICON_INFORMATION, this );
+            return;
+        }
+        if ( !m_index || m_index->numEntries( ) == 0 ) {
+            wxMessageBox( wxT( "Open and index a .dat file first." ),
+                wxT( "Compare With Index" ), wxOK | wxICON_INFORMATION, this );
+            return;
+        }
+
+        // Pick the other (typically older) index file to compare against.
+        auto idxDir = this->findDatIndex( );
+        wxFileDialog dialog( this, wxT( "Select an index file to compare against (e.g. an older index)" ),
+            idxDir.GetPath( ), wxEmptyString,
+            wxT( "Gw2Browser index (*.idx)|*.idx|All files (*.*)|*.*" ),
+            wxFD_OPEN | wxFD_FILE_MUST_EXIST );
+        if ( dialog.ShowModal( ) != wxID_OK ) {
+            return;
+        }
+
+        // Load the other index into a temporary model.
+        auto otherIndex = std::make_shared<DatIndex>( );
+        {
+            wxBusyCursor busy;
+            DatIndexReader reader( *otherIndex );
+            if ( !reader.open( dialog.GetPath( ) ) ) {
+                wxMessageBox( wxT( "Failed to open the selected index file. It may be from an incompatible version or corrupt." ),
+                    wxT( "Compare With Index" ), wxOK | wxICON_ERROR, this );
+                return;
+            }
+            bool ok = true;
+            while ( !reader.isDone( ) ) {
+                auto result = reader.read( 8192 );
+                if ( !( result & DatIndexReader::RR_Success ) ) {
+                    ok = false;
+                    break;
+                }
+            }
+            if ( !ok ) {
+                wxMessageBox( wxT( "The selected index file appears to be corrupt." ),
+                    wxT( "Compare With Index" ), wxOK | wxICON_ERROR, this );
+                return;
+            }
+        }
+
+        // Compute the diff: the currently loaded index is the "new" side, the
+        // chosen file is the "old" side.
+        std::unordered_map<uint64, const DatIndexEntry*> oldMap;
+        oldMap.reserve( otherIndex->numEntries( ) );
+        for ( uint i = 0; i < otherIndex->numEntries( ); i++ ) {
+            auto entry = otherIndex->entry( i );
+            if ( entry ) {
+                oldMap[entryKey( entry )] = entry;
+            }
+        }
+
+        std::vector<DiffRow> rows;
+        std::unordered_set<uint64> seen;
+        seen.reserve( m_index->numEntries( ) );
+        uint added = 0, changed = 0, removed = 0;
+
+        for ( uint i = 0; i < m_index->numEntries( ); i++ ) {
+            auto entry = m_index->entry( i );
+            if ( !entry ) {
+                continue;
+            }
+            auto key = entryKey( entry );
+            seen.insert( key );
+
+            auto it = oldMap.find( key );
+            if ( it == oldMap.end( ) ) {
+                rows.push_back( { DS_Added, entry->baseId( ), entry->fileId( ), 0, entry->mftEntry( ),
+                    entry->name( ), categoryPath( entry->category( ) ) } );
+                added++;
+            } else if ( it->second->mftEntry( ) != entry->mftEntry( ) ) {
+                rows.push_back( { DS_Changed, entry->baseId( ), entry->fileId( ),
+                    it->second->mftEntry( ), entry->mftEntry( ),
+                    entry->name( ), categoryPath( entry->category( ) ) } );
+                changed++;
+            }
+        }
+
+        for ( auto const& kv : oldMap ) {
+            if ( seen.count( kv.first ) ) {
+                continue;
+            }
+            auto entry = kv.second;
+            rows.push_back( { DS_Removed, entry->baseId( ), entry->fileId( ), entry->mftEntry( ), 0,
+                entry->name( ), categoryPath( entry->category( ) ) } );
+            removed++;
+        }
+
+        // Sort: group by status (added, changed, removed), then by base id.
+        std::sort( rows.begin( ), rows.end( ), [] ( const DiffRow& a, const DiffRow& b ) {
+            if ( a.status != b.status ) {
+                return a.status < b.status;
+            }
+            return a.baseId < b.baseId;
+        } );
+
+        // Build and show the results dialog.
+        wxDialog dlg( this, wxID_ANY, wxT( "Index Comparison" ), wxDefaultPosition,
+            wxSize( 760, 540 ), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER );
+        auto sizer = new wxBoxSizer( wxVERTICAL );
+
+        auto summary = wxString::Format(
+            wxT( "%u added, %u removed, %u changed   (current index: %u entries, other index: %u entries)" ),
+            added, removed, changed, m_index->numEntries( ), otherIndex->numEntries( ) );
+        sizer->Add( new wxStaticText( &dlg, wxID_ANY, summary ), wxSizerFlags( ).Border( wxALL, 8 ) );
+
+        auto list = new wxListCtrl( &dlg, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+            wxLC_REPORT | wxLC_SINGLE_SEL | wxLC_HRULES );
+        list->AppendColumn( wxT( "Status" ), wxLIST_FORMAT_LEFT, 75 );
+        list->AppendColumn( wxT( "Name" ), wxLIST_FORMAT_LEFT, 130 );
+        list->AppendColumn( wxT( "File ID" ), wxLIST_FORMAT_LEFT, 80 );
+        list->AppendColumn( wxT( "MFT (old > new)" ), wxLIST_FORMAT_LEFT, 130 );
+        list->AppendColumn( wxT( "Category" ), wxLIST_FORMAT_LEFT, 300 );
+
+        // Cap how many rows we render to keep the control responsive; the full
+        // set is always available via the CSV export.
+        const size_t displayCap = 20000;
+        size_t displayCount = std::min( rows.size( ), displayCap );
+
+        list->Freeze( );
+        for ( size_t i = 0; i < displayCount; i++ ) {
+            auto const& row = rows[i];
+            wxString statusStr = ( row.status == DS_Added ) ? wxT( "Added" )
+                : ( row.status == DS_Removed ) ? wxT( "Removed" ) : wxT( "Changed" );
+            long idx = list->InsertItem( static_cast<long>( i ), statusStr );
+            list->SetItem( idx, 1, row.name );
+            list->SetItem( idx, 2, row.fileId ? wxString::Format( wxT( "%u" ), row.fileId ) : wxString( wxT( "-" ) ) );
+            wxString mft = ( row.status == DS_Added ) ? wxString::Format( wxT( "%u" ), row.mftNew )
+                : ( row.status == DS_Removed ) ? wxString::Format( wxT( "%u" ), row.mftOld )
+                : wxString::Format( wxT( "%u > %u" ), row.mftOld, row.mftNew );
+            list->SetItem( idx, 3, mft );
+            list->SetItem( idx, 4, row.category );
+            wxColour colour = ( row.status == DS_Added ) ? wxColour( 0, 128, 0 )
+                : ( row.status == DS_Removed ) ? wxColour( 176, 0, 0 ) : wxColour( 180, 120, 0 );
+            list->SetItemTextColour( idx, colour );
+        }
+        list->Thaw( );
+        sizer->Add( list, wxSizerFlags( 1 ).Expand( ).Border( wxLEFT | wxRIGHT, 8 ) );
+
+        if ( rows.size( ) > displayCap ) {
+            auto note = wxString::Format(
+                wxT( "Showing the first %u of %u differences. Use \"Save to CSV...\" to export them all." ),
+                static_cast<uint>( displayCap ), static_cast<uint>( rows.size( ) ) );
+            sizer->Add( new wxStaticText( &dlg, wxID_ANY, note ), wxSizerFlags( ).Border( wxALL, 8 ) );
+        }
+
+        auto btnSizer = new wxBoxSizer( wxHORIZONTAL );
+        btnSizer->Add( new wxButton( &dlg, wxID_SAVE, wxT( "Save to CSV..." ) ), wxSizerFlags( ).Border( wxALL, 8 ) );
+        btnSizer->AddStretchSpacer( );
+        btnSizer->Add( new wxButton( &dlg, wxID_CLOSE, wxT( "Close" ) ), wxSizerFlags( ).Border( wxALL, 8 ) );
+        sizer->Add( btnSizer, wxSizerFlags( ).Expand( ) );
+
+        dlg.SetSizer( sizer );
+
+        dlg.Bind( wxEVT_BUTTON, [&] ( wxCommandEvent& ) {
+            wxFileDialog save( &dlg, wxT( "Save comparison" ), wxEmptyString, wxT( "index-diff.csv" ),
+                wxT( "CSV file (*.csv)|*.csv|All files (*.*)|*.*" ), wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+            if ( save.ShowModal( ) != wxID_OK ) {
+                return;
+            }
+            wxTextFile file( save.GetPath( ) );
+            if ( file.Exists( ) ) {
+                file.Open( );
+            } else {
+                file.Create( );
+            }
+            file.Clear( );
+            file.AddLine( wxT( "Status,Name,FileId,BaseId,MftOld,MftNew,Category" ) );
+            for ( auto const& row : rows ) {
+                wxString statusStr = ( row.status == DS_Added ) ? wxT( "Added" )
+                    : ( row.status == DS_Removed ) ? wxT( "Removed" ) : wxT( "Changed" );
+                file.AddLine( wxString::Format( wxT( "%s,%s,%u,%u,%u,%u,\"%s\"" ),
+                    statusStr, row.name, row.fileId, row.baseId, row.mftOld, row.mftNew, row.category ) );
+            }
+            file.Write( );
+            file.Close( );
+        }, wxID_SAVE );
+
+        dlg.Bind( wxEVT_BUTTON, [&] ( wxCommandEvent& ) { dlg.EndModal( wxID_CLOSE ); }, wxID_CLOSE );
+
+        dlg.ShowModal( );
+    }
+
+    //============================================================================/
+
     void BrowserWindow::onPaneCloseEvt( wxAuiManagerEvent &p_event ) {
         auto evt = p_event.GetPane( )->window;
         if ( evt == m_uiManager.GetPane( wxT( "FindFilePanel" ) ).window ) {
@@ -666,6 +922,9 @@ namespace gw2b {
         if ( !isComplete ) {
             this->indexDat( );
         } else {
+            // Upgrade older indexes (or refresh) with the current .dat fingerprint
+            // so it is persisted on the next save.
+            m_index->setDatFingerprint( m_datFile.fingerprint( ) );
             m_catTree->refreshAfterBulkUpdate( );
         }
     }
