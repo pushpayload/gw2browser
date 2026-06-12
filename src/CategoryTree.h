@@ -208,6 +208,7 @@ namespace gw2b {
     private:
         void buildCategoryTreeFromIndex( );
         void buildCategorySubtree( const DatIndexCategory& p_category );
+        void removeNonCategoryChildren( const wxTreeItemId& p_parent );
         void addCategoryEntriesToArray( Array<const DatIndexEntry*>& p_array, uint& p_index, const DatIndexCategory& p_category ) const;
 
         /** Helper method to add an entry to the tree at the right spot, for sorting.

@@ -126,7 +126,7 @@ namespace gw2b {
                 this->SetItemData( node, new CategoryTreeItem( CategoryTreeItem::DT_Entry, &p_entry ) );
             } else {
                 auto itemData = static_cast<CategoryTreeItem*>( this->GetItemData( category ) );
-                if ( itemData->dataType( ) != CategoryTreeItem::DT_Category ) {
+                if ( !itemData || itemData->dataType( ) != CategoryTreeItem::DT_Category ) {
                     return;
                 }
                 itemData->setDirty( true );
@@ -161,7 +161,7 @@ namespace gw2b {
         // Scan for existing node
         while ( child.IsOk( ) ) {
             auto data = static_cast<const CategoryTreeItem*>( this->GetItemData( child ) );
-            if ( data->dataType( ) != CategoryTreeItem::DT_Category ) {
+            if ( !data || data->dataType( ) != CategoryTreeItem::DT_Category ) {
                 break;
             }
             if ( data->data( ) == &p_category ) {
@@ -289,9 +289,8 @@ namespace gw2b {
             else if ( text > p_displayName ) {
                 break;
             }
-            // Categories have nullptr item data
             auto data = static_cast<const CategoryTreeItem*>( this->GetItemData( child ) );
-            if ( data->dataType( ) != CategoryTreeItem::DT_Category ) {
+            if ( !data || data->dataType( ) != CategoryTreeItem::DT_Category ) {
                 break;
             }
             // Move to next
@@ -402,6 +401,24 @@ namespace gw2b {
         // Loop through entries
         for ( uint i = 0; i < p_category.numEntries( ); i++ ) {
             p_array[p_index++] = p_category.entry( i );
+        }
+    }
+
+    //============================================================================/
+
+    void CategoryTree::removeNonCategoryChildren( const wxTreeItemId& p_parent ) {
+        wxTreeItemIdValue cookie;
+        auto child = this->GetFirstChild( p_parent, cookie );
+
+        while ( child.IsOk( ) ) {
+            auto next = this->GetNextChild( p_parent, cookie );
+            auto data = static_cast<CategoryTreeItem*>( this->GetItemData( child ) );
+
+            if ( !data || data->dataType( ) != CategoryTreeItem::DT_Category ) {
+                this->Delete( child );
+            }
+
+            child = next;
         }
     }
 
@@ -541,7 +558,7 @@ namespace gw2b {
         auto itemData = static_cast<CategoryTreeItem*>( this->GetItemData( id ) );
 
         // If this is not a category, skip it
-        if ( itemData && itemData->dataType( ) != CategoryTreeItem::DT_Category ) {
+        if ( !itemData || itemData->dataType( ) != CategoryTreeItem::DT_Category ) {
             return;
         }
 
@@ -551,9 +568,10 @@ namespace gw2b {
         // Skip if the category isn't dirty
         if ( !itemData->isDirty( ) ) {
             return;
-        } else {
-            this->DeleteChildren( id );
         }
+
+        // Remove stale file entries and wx placeholder nodes, keep subcategory folders
+        this->removeNonCategoryChildren( id );
 
         // Fetch the category info
         auto category = static_cast<const DatIndexCategory*>( itemData->data( ) );
