@@ -1,4 +1,4 @@
-/** \file       WriteIndexTask.h
+/** \file       WriteIndexTask.cpp
  *  \brief      Contains definition of the WriteIndexTask class.
  *  \author     Rhoot
  */
@@ -27,12 +27,25 @@
 
 namespace gw2b {
 
+    namespace {
+
+        const uint IO_BATCH_SIZE = 8192;
+
+    } // namespace
+
     WriteIndexTask::WriteIndexTask( const std::shared_ptr<DatIndex>& p_index, const wxFileName& p_filename )
         : m_index( p_index )
         , m_writer( *p_index )
         , m_filename( p_filename )
-        , m_errorOccured( false ) {
+        , m_errorOccured( false )
+        , m_workerStarted( false )
+        , m_ioProgress( 0 )
+        , m_workerDone( false ) {
         Ensure::notNull( p_index.get( ) );
+    }
+
+    WriteIndexTask::~WriteIndexTask( ) {
+        this->joinWorker( );
     }
 
     bool WriteIndexTask::init( ) {
@@ -50,27 +63,59 @@ namespace gw2b {
         return false;
     }
 
+    void WriteIndexTask::joinWorker( ) {
+        if ( m_worker.joinable( ) ) {
+            m_worker.join( );
+        }
+    }
+
+    void WriteIndexTask::runWrite( ) {
+        while ( !m_writer.isDone( ) ) {
+            if ( !m_writer.write( IO_BATCH_SIZE ) ) {
+                m_errorOccured = true;
+                auto path = m_filename.GetFullPath( );
+                if ( wxFile::Exists( path ) ) {
+                    wxRemoveFile( path );
+                }
+                break;
+            }
+
+            m_ioProgress.store( m_writer.currentEntry( ) + m_writer.currentCategory( ) );
+        }
+
+        m_workerDone = true;
+    }
+
     void WriteIndexTask::perform( ) {
-        if ( !this->isDone( ) ) {
-            m_errorOccured = !m_writer.write( 7 );
-            uint progress = m_writer.currentEntry( ) + m_writer.currentCategory( );
-            this->setCurrentProgress( progress );
-            this->setText( wxT( "Saving .dat index..." ) );
-            // If something went wrong, we should delete the file again since it's half-complete
-            auto path = m_filename.GetFullPath( );
-            if ( m_errorOccured && wxFile::Exists( path ) ) {
-                wxRemoveFile( path );
-            }
-            // If done, remove the dirty flag from the index
-            if ( this->isDone( ) ) {
-                m_index->setDirty( false );
-            }
+        if ( m_errorOccured.load( ) ) {
+            return;
+        }
+
+        if ( !m_workerStarted ) {
+            m_workerStarted = true;
+            m_worker = std::thread( &WriteIndexTask::runWrite, this );
+            return;
+        }
+
+        this->setCurrentProgress( m_ioProgress.load( ) );
+        this->setText( wxT( "Saving .dat index..." ) );
+
+        if ( !m_workerDone.load( ) ) {
+            return;
+        }
+
+        this->joinWorker( );
+        this->setCurrentProgress( this->maxProgress( ) );
+
+        if ( !m_errorOccured.load( ) ) {
+            m_index->setDirty( false );
         }
     }
 
     void WriteIndexTask::abort( ) {
+        this->joinWorker( );
         m_writer.close( );
-        // Remove the file again
+
         auto path = m_filename.GetFullPath( );
         if ( wxFile::Exists( path ) ) {
             wxRemoveFile( path );
@@ -82,7 +127,7 @@ namespace gw2b {
     }
 
     bool WriteIndexTask::isDone( ) const {
-        return ( m_writer.isDone( ) || m_errorOccured );
+        return m_errorOccured.load( ) || m_workerDone.load( );
     }
 
 }; // namespace gw2b

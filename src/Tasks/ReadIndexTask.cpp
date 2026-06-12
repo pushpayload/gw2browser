@@ -28,13 +28,30 @@
 
 namespace gw2b {
 
+    namespace {
+
+        const uint IO_BATCH_SIZE = 8192;
+
+    } // namespace
+
     ReadIndexTask::ReadIndexTask( const std::shared_ptr<DatIndex>& p_index, const wxString& p_filename, uint64 p_datTimestamp )
         : m_index( p_index )
         , m_reader( *p_index )
         , m_filename( p_filename )
         , m_errorOccured( false )
-        , m_datTimestamp( p_datTimestamp ) {
+        , m_datTimestamp( p_datTimestamp )
+        , m_batchUpdateActive( false )
+        , m_workerStarted( false )
+        , m_ioProgress( 0 )
+        , m_workerDone( false )
+        , m_abortRequested( false ) {
         Ensure::notNull( p_index.get( ) );
+    }
+
+    ReadIndexTask::~ReadIndexTask( ) {
+        m_abortRequested = true;
+        this->joinWorker( );
+        this->endBatchUpdateIfNeeded( );
     }
 
     bool ReadIndexTask::init( ) {
@@ -46,25 +63,74 @@ namespace gw2b {
             result = ( m_index->datTimestamp( ) == m_datTimestamp );
         }
         if ( result ) {
+            m_index->beginBatchUpdate( );
+            m_batchUpdateActive = true;
             this->setMaxProgress( m_reader.numEntries( ) + m_reader.numCategories( ) );
         }
 
         return result;
     }
 
-    void ReadIndexTask::perform( ) {
-        if ( !this->isDone( ) ) {
-            m_errorOccured = !( m_reader.read( 7 ) & DatIndexReader::RR_Success );
-            if ( m_errorOccured ) {
-                m_index->clear( );
-            }
-            uint progress = m_reader.currentEntry( ) + m_reader.currentCategory( );
-            this->setCurrentProgress( progress );
-            this->setText( wxT( "Reading .dat index..." ) );
+    void ReadIndexTask::joinWorker( ) {
+        if ( m_worker.joinable( ) ) {
+            m_worker.join( );
         }
     }
 
+    void ReadIndexTask::endBatchUpdateIfNeeded( ) {
+        if ( m_batchUpdateActive ) {
+            m_index->endBatchUpdate( );
+            m_batchUpdateActive = false;
+        }
+    }
+
+    void ReadIndexTask::runRead( ) {
+        while ( !m_reader.isDone( ) && !m_abortRequested.load( ) ) {
+            auto result = m_reader.read( IO_BATCH_SIZE );
+            m_ioProgress.store( m_reader.currentEntry( ) + m_reader.currentCategory( ) );
+
+            if ( !( result & DatIndexReader::RR_Success ) ) {
+                m_errorOccured = true;
+                m_index->clear( );
+                break;
+            }
+        }
+
+        m_workerDone = true;
+    }
+
+    void ReadIndexTask::perform( ) {
+        if ( m_errorOccured.load( ) ) {
+            return;
+        }
+
+        if ( !m_workerStarted ) {
+            m_workerStarted = true;
+            m_worker = std::thread( &ReadIndexTask::runRead, this );
+            return;
+        }
+
+        this->setCurrentProgress( m_ioProgress.load( ) );
+        this->setText( wxT( "Reading .dat index..." ) );
+
+        if ( !m_workerDone.load( ) ) {
+            return;
+        }
+
+        this->joinWorker( );
+        this->setCurrentProgress( this->maxProgress( ) );
+        this->endBatchUpdateIfNeeded( );
+    }
+
     void ReadIndexTask::abort( ) {
+        m_abortRequested = true;
+        this->joinWorker( );
+
+        if ( m_errorOccured.load( ) ) {
+            m_index->clear( );
+        }
+
+        this->endBatchUpdateIfNeeded( );
         this->clean( );
     }
 
@@ -73,7 +139,7 @@ namespace gw2b {
     }
 
     bool ReadIndexTask::isDone( ) const {
-        return ( m_errorOccured || !m_reader.isOpen( ) || m_reader.isDone( ) );
+        return m_errorOccured.load( ) || m_workerDone.load( );
     }
 
 }; // namespace gw2b

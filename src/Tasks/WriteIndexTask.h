@@ -27,6 +27,9 @@
 #ifndef TASKS_WRITEINDEXTASK_H_INCLUDED
 #define TASKS_WRITEINDEXTASK_H_INCLUDED
 
+#include <atomic>
+#include <thread>
+
 #include <wx/filename.h>
 
 #include "DatIndexIO.h"
@@ -39,9 +42,14 @@ namespace gw2b {
         std::shared_ptr<DatIndex>   m_index;
         DatIndexWriter              m_writer;
         wxFileName                  m_filename;
-        bool                        m_errorOccured;
+        std::atomic<bool>           m_errorOccured;
+        bool                        m_workerStarted;
+        std::thread                 m_worker;
+        std::atomic<uint>           m_ioProgress;
+        std::atomic<bool>           m_workerDone;
     public:
         WriteIndexTask( const std::shared_ptr<DatIndex>& p_index, const wxFileName& p_filename );
+        virtual ~WriteIndexTask( );
 
         virtual bool init( );
         virtual void perform( );
@@ -52,6 +60,9 @@ namespace gw2b {
             return false;
         }
         virtual bool isDone( ) const;
+    private:
+        void runWrite( );
+        void joinWorker( );
     }; // class WriteIndexTask
 
 }; // namespace gw2b

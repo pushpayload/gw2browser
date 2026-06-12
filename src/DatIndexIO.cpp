@@ -60,7 +60,7 @@ namespace gw2b {
             m_index.clear( ); // always start with a fresh index
             m_index.setDatTimestamp( m_header.datTimestamp );
             m_index.reserveEntries( m_header.numEntries );
-            m_index.reserveCategories( m_header.numEntries );
+            m_index.reserveCategories( m_header.numCategories );
             return true;
         }
 
@@ -190,9 +190,33 @@ namespace gw2b {
     }
 
     void DatIndexWriter::close( ) {
+        this->flushBuffer( );
         m_file.Close( );
         m_categoriesWritten = 0;
         m_entriesWritten = 0;
+        m_buffer.clear( );
+    }
+
+    bool DatIndexWriter::appendToBuffer( const void* p_data, size_t p_size ) {
+        const char* bytes = static_cast<const char*>( p_data );
+        m_buffer.insert( m_buffer.end( ), bytes, bytes + p_size );
+
+        if ( m_buffer.size( ) >= 1024 * 1024 ) {
+            return this->flushBuffer( );
+        }
+
+        return true;
+    }
+
+    bool DatIndexWriter::flushBuffer( ) {
+        if ( m_buffer.empty( ) ) {
+            return true;
+        }
+
+        ssize_t bytesWritten = m_file.Write( m_buffer.data( ), m_buffer.size( ) );
+        m_buffer.clear( );
+
+        return bytesWritten >= 0;
     }
 
     bool DatIndexWriter::isDone( ) const {
@@ -202,8 +226,6 @@ namespace gw2b {
 
     bool DatIndexWriter::write( uint p_amount ) {
         for ( uint i = 0; i < p_amount; i++ ) {
-            ssize_t bytesWritten;
-
             // First write categories, one at a time
             if ( m_categoriesWritten < m_index.numCategories( ) ) {
                 auto category = m_index.category( m_categoriesWritten );
@@ -213,13 +235,11 @@ namespace gw2b {
                 DatIndexCategoryFields fields;
                 fields.parent = ( parent ? parent->index( ) : -1 );
                 fields.nameLength = nameBuffer.length( );
-                bytesWritten = m_file.Write( &fields, sizeof( fields ) );
-                if ( bytesWritten < static_cast<ssize_t>( sizeof( fields ) ) ) {
+                if ( !this->appendToBuffer( &fields, sizeof( fields ) ) ) {
                     return false;
                 }
                 // Name
-                bytesWritten = m_file.Write( nameBuffer, fields.nameLength );
-                if ( bytesWritten < fields.nameLength ) {
+                if ( !this->appendToBuffer( nameBuffer, fields.nameLength ) ) {
                     return false;
                 }
                 // Increase the counter
@@ -239,13 +259,11 @@ namespace gw2b {
                 fields.mftEntry = entry->mftEntry( );
                 fields.fileType = entry->fileType( );
                 fields.nameLength = nameBuffer.length( );
-                bytesWritten = m_file.Write( &fields, sizeof( fields ) );
-                if ( bytesWritten < static_cast<ssize_t>( sizeof( fields ) ) ) {
+                if ( !this->appendToBuffer( &fields, sizeof( fields ) ) ) {
                     return false;
                 }
                 // Name
-                bytesWritten = m_file.Write( nameBuffer, fields.nameLength );
-                if ( bytesWritten < fields.nameLength ) {
+                if ( !this->appendToBuffer( nameBuffer, fields.nameLength ) ) {
                     return false;
                 }
                 // Increase the counter
@@ -256,6 +274,10 @@ namespace gw2b {
             else {
                 break;
             }
+        }
+
+        if ( this->isDone( ) && !this->flushBuffer( ) ) {
+            return false;
         }
 
         // Remove dirty flag if everything is saved

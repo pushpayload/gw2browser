@@ -27,6 +27,9 @@
 #ifndef TASKS_READINDEXTASK_H_INCLUDED
 #define TASKS_READINDEXTASK_H_INCLUDED
 
+#include <atomic>
+#include <thread>
+
 #include "DatIndexIO.h"
 #include "Task.h"
 
@@ -37,10 +40,17 @@ namespace gw2b {
         std::shared_ptr<DatIndex>   m_index;
         DatIndexReader              m_reader;
         wxString                    m_filename;
-        bool                        m_errorOccured;
+        std::atomic<bool>           m_errorOccured;
         uint64                      m_datTimestamp;
+        bool                        m_batchUpdateActive;
+        bool                        m_workerStarted;
+        std::thread                 m_worker;
+        std::atomic<uint>           m_ioProgress;
+        std::atomic<bool>           m_workerDone;
+        std::atomic<bool>           m_abortRequested;
     public:
         ReadIndexTask( const std::shared_ptr<DatIndex>& p_index, const wxString& p_filename, uint64 p_datTimestamp );
+        virtual ~ReadIndexTask( );
 
         virtual bool init( ) override;
         virtual void perform( ) override;
@@ -48,6 +58,10 @@ namespace gw2b {
         virtual void clean( ) override;
 
         virtual bool isDone( ) const override;
+    private:
+        void runRead( );
+        void joinWorker( );
+        void endBatchUpdateIfNeeded( );
     }; // class ReadIndexTask
 
 }; // namespace gw2b

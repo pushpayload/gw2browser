@@ -28,6 +28,8 @@
 #ifndef DATINDEXREADER_H_INCLUDED
 #define DATINDEXREADER_H_INCLUDED
 
+#include <vector>
+
 #include <wx/file.h>
 
 #include "DatIndex.h"
@@ -140,10 +142,11 @@ namespace gw2b {
 
     /** Responsible for writing a .dat index to file. */
     class DatIndexWriter {
-        DatIndex&       m_index;
-        wxFile          m_file;
-        uint            m_categoriesWritten;
-        uint            m_entriesWritten;
+        DatIndex&               m_index;
+        wxFile                  m_file;
+        uint                    m_categoriesWritten;
+        uint                    m_entriesWritten;
+        std::vector<char>       m_buffer;
     public:
         /** Constructor.
         *  \param[in]  p_index  Index to write onto disk. */
@@ -192,6 +195,9 @@ namespace gw2b {
         *  \param[in]  p_amount     Amount of write cycles to perform.
         *  \return bool    true if successful, false if not. */
         bool write( uint p_amount = 1 );
+    private:
+        bool appendToBuffer( const void* p_data, size_t p_size );
+        bool flushBuffer( );
 
     }; // class DatIndexWriter
 
