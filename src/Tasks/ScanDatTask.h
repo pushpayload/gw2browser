@@ -28,6 +28,8 @@
 #ifndef TASKS_SCANDATTASK_H_INCLUDED
 #define TASKS_SCANDATTASK_H_INCLUDED
 
+#include <vector>
+
 #include "ANetStructs.h"
 #include "Task.h"
 
@@ -37,20 +39,35 @@ namespace gw2b {
     class DatIndexCategory;
 
     class ScanDatTask : public Task {
+        struct ScanResult {
+            uint32                  entryNumber;
+            uint32                  baseId;
+            uint32                  fileId;
+            ANetFileType            fileType;
+            wxString                displayName;
+            std::vector<wxString>   categoryPath;
+            bool                    valid;
+        };
+
         std::shared_ptr<DatIndex>   m_index;
-        Array<byte>                 m_outputBuffer;
         DatFile&                    m_datFile;
+        uint                        m_batchSize;
+        bool                        m_batchUpdateActive;
     public:
         ScanDatTask( const std::shared_ptr<DatIndex>& p_index, DatFile& p_datFile );
         virtual ~ScanDatTask( );
 
         virtual bool init( ) override;
         virtual void perform( ) override;
+        virtual void abort( ) override;
     private:
         uint requiredIdentificationSize( const byte* p_data, size_t p_size, ANetFileType p_fileType );
-        bool isBitmapFontChunk(uint p_baseId);
-        DatIndexCategory* categorize( ANetFileType p_fileType, const byte* p_data, size_t p_size );
-        void ensureBufferSize( size_t p_size );
+        bool isBitmapFontChunk( uint p_baseId );
+        void buildCategoryPath( ANetFileType p_fileType, const byte* p_data, size_t p_size, uint p_entryNumber,
+            DatFile::ThreadContext& p_context, std::vector<wxString>& p_path );
+        ScanResult scanEntry( uint p_entryNumber, DatFile::ThreadContext& p_context, Array<byte>& p_buffer );
+        void commitResult( const ScanResult& p_result );
+        void endBatchUpdateIfNeeded( );
     }; // class ScanDatTask
 
 }; // namespace gw2b

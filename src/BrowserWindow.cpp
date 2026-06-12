@@ -514,6 +514,8 @@ namespace gw2b {
     //============================================================================/
 
     void BrowserWindow::onScanTaskComplete( ) {
+        m_catTree->setDatIndex( m_index );
+
         auto writeTask = new WriteIndexTask( m_index, this->findDatIndex( ).GetFullPath( ) );
         this->performTask( writeTask );
     }

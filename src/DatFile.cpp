@@ -38,6 +38,23 @@ namespace gw2b {
         uint32  fileId;
     };
 
+    DatFile::ThreadContext::ThreadContext( )
+        : m_lastReadEntry( -1 ) {
+    }
+
+    bool DatFile::ThreadContext::open( const DatFile& p_datFile ) {
+        m_file.Close( );
+        m_inputBuffer.Clear( );
+        m_lastReadEntry = -1;
+
+        if ( !p_datFile.isOpen( ) || p_datFile.m_path.IsEmpty( ) ) {
+            return false;
+        }
+
+        m_file.Open( p_datFile.m_path );
+        return m_file.IsOpened( );
+    }
+
     DatFile::DatFile( )
         : m_lastReadEntry( -1 ) {
         ::memset( &m_datHead, 0, sizeof( m_datHead ) );
@@ -129,6 +146,7 @@ namespace gw2b {
             }
 
             // Success!
+            m_path = p_filename;
             return true;
         }
 
@@ -144,6 +162,7 @@ namespace gw2b {
         // Clear input buffer and lookup tables
         m_inputBuffer.Clear( );
         m_entryToId.Clear( );
+        m_path.Clear( );
 
         // Clear PODs
         ::memset( &m_datHead, 0, sizeof( m_datHead ) );
@@ -175,8 +194,32 @@ namespace gw2b {
         return entry.size;
     }
 
+    uint DatFile::entrySize( uint p_entryNum, ThreadContext& p_context ) const {
+        if ( !this->isOpen( ) || !p_context.m_file.IsOpened( ) ) {
+            return std::numeric_limits<uint>::max( );
+        }
+        if ( p_entryNum >= m_mftEntries.GetSize( ) ) {
+            return std::numeric_limits<uint>::max( );
+        }
+
+        auto& entry = m_mftEntries[p_entryNum];
+
+        if ( entry.compressionFlag & ANCF_Compressed ) {
+            uint32 uncompressedSize = 0;
+            p_context.m_file.Seek( entry.offset + 4, wxFromStart );
+            p_context.m_file.Read( &uncompressedSize, sizeof( uncompressedSize ) );
+            return uncompressedSize;
+        }
+
+        return entry.size;
+    }
+
     uint DatFile::fileSize( uint p_fileNum ) {
         return this->entrySize( p_fileNum + MFT_FILE_OFFSET );
+    }
+
+    uint DatFile::fileSize( uint p_fileNum, ThreadContext& p_context ) const {
+        return this->entrySize( p_fileNum + MFT_FILE_OFFSET, p_context );
     }
 
     uint DatFile::entryNumFromFileOrBaseId( uint p_Id ) const {
@@ -231,6 +274,86 @@ namespace gw2b {
         return this->peekEntry( p_fileNum + MFT_FILE_OFFSET, p_peekSize, po_Buffer );
     }
 
+    uint DatFile::peekFile( uint p_fileNum, uint p_peekSize, byte* po_Buffer, ThreadContext& p_context ) const {
+        return this->peekEntry( p_fileNum + MFT_FILE_OFFSET, p_peekSize, po_Buffer, p_context );
+    }
+
+    namespace {
+
+        uint copyPeekData( uint p_peekSize, uint p_inputSize, const byte* p_inputBuffer, byte* po_Buffer ) {
+            const uint dataSize = wxMin( p_peekSize, p_inputSize );
+
+            const uint blockSize = 65536;
+            const uint blockDataSize = 65532;
+            const uint bytetoskip = 4;
+            const uint numBlock = floor( dataSize / blockSize );
+
+#pragma omp parallel for
+            for ( int i = 0; i < static_cast<int>( numBlock ); i++ ) {
+                ::memcpy( &po_Buffer[i * blockDataSize], &p_inputBuffer[( i * blockDataSize ) + ( i * bytetoskip )], blockDataSize );
+            }
+
+            const auto dataReaded = numBlock * blockSize;
+            const auto dataRemain = dataSize - dataReaded;
+
+            if ( dataRemain ) {
+                auto outBufferIndex = blockDataSize * numBlock;
+                ::memcpy( &po_Buffer[outBufferIndex], &p_inputBuffer[dataReaded], dataRemain );
+            }
+
+            return dataSize;
+        }
+
+    } // namespace
+
+    uint DatFile::peekEntry( uint p_entryNum, uint p_peekSize, byte* po_Buffer, ThreadContext& p_context ) const {
+        Ensure::notNull( po_Buffer );
+
+        if ( p_peekSize == 0 || !this->isOpen( ) || !p_context.m_file.IsOpened( ) ) {
+            return 0;
+        }
+
+        uint inputSize;
+
+        if ( p_context.m_lastReadEntry != static_cast<int>( p_entryNum ) ) {
+            auto entryIsInRange = m_mftHead.numEntries > p_entryNum;
+            if ( !entryIsInRange ) {
+                return 0;
+            }
+
+            auto& entry = m_mftEntries[p_entryNum];
+            auto entryIsInUse = ( entry.entryFlags & ANMEF_InUse );
+            auto fileIsLargeEnough = static_cast<uint64>( p_context.m_file.Length( ) ) >= entry.offset + entry.size;
+            if ( !entryIsInUse || !fileIsLargeEnough ) {
+                return 0;
+            }
+
+            inputSize = entry.size;
+            if ( p_context.m_inputBuffer.GetSize( ) < inputSize ) {
+                p_context.m_inputBuffer.SetSize( inputSize );
+            }
+
+            p_context.m_file.Seek( entry.offset, wxFromStart );
+            p_context.m_file.Read( p_context.m_inputBuffer.GetPointer( ), inputSize );
+            p_context.m_lastReadEntry = static_cast<int>( p_entryNum );
+        } else {
+            inputSize = m_mftEntries[p_entryNum].size;
+        }
+
+        if ( m_mftEntries[p_entryNum].compressionFlag ) {
+            uint32 outputSize = p_peekSize;
+            try {
+                gw2dt::compression::inflateDatFileBuffer( inputSize, p_context.m_inputBuffer.GetPointer( ), outputSize, po_Buffer );
+            } catch ( const gw2dt::exception::Exception& err ) {
+                wxLogMessage( wxT( "Failed to decompress file %u: %s" ), p_entryNum, std::string( err.what( ) ) );
+                outputSize = 0;
+            }
+            return outputSize;
+        }
+
+        return copyPeekData( p_peekSize, inputSize, p_context.m_inputBuffer.GetPointer( ), po_Buffer );
+    }
+
     uint DatFile::peekEntry( uint p_entryNum, uint p_peekSize, byte* po_Buffer ) {
         Ensure::notNull( po_Buffer );
         uint inputSize;
@@ -279,33 +402,9 @@ namespace gw2b {
                 outputSize = 0;
             }
             return outputSize;
-        } else {
-            const uint dataSize = wxMin( p_peekSize, inputSize );
-
-            const uint blockSize = 65536;
-            const uint blockDataSize = 65532;
-            // skip 4 byte every 65532 byte, this is hash?
-            const uint bytetoskip = 4;
-            // how many block in data?
-            // (round down so if the data less than 65532, it will skip the copy block loop)
-            const uint numBlock = floor( dataSize / blockSize );
-
-#pragma omp parallel for
-            for ( int i = 0; i < static_cast<int>( numBlock ); i++ ) {
-                ::memcpy( &po_Buffer[i * blockDataSize], &m_inputBuffer[( i * blockDataSize ) + ( i * bytetoskip )], blockDataSize );
-            }
-
-            const auto dataReaded = numBlock * blockSize;
-            const auto dataRemain = dataSize - dataReaded;
-
-            // copy the last remaining data
-            if ( dataRemain ) {
-                auto outBufferIndex = blockDataSize * numBlock;
-                ::memcpy( &po_Buffer[outBufferIndex], &m_inputBuffer[dataReaded], dataRemain );
-            }
-
-            return sizeof( po_Buffer );
         }
+
+        return copyPeekData( p_peekSize, inputSize, m_inputBuffer.GetPointer( ), po_Buffer );
     }
 
     Array<byte> DatFile::peekFile( uint p_fileNum, uint p_peekSize ) {
@@ -325,6 +424,17 @@ namespace gw2b {
 
     uint DatFile::readFile( uint p_fileNum, byte* po_Buffer ) {
         return this->readEntry( p_fileNum + MFT_FILE_OFFSET, po_Buffer );
+    }
+
+    uint DatFile::readFile( uint p_fileNum, byte* po_Buffer, ThreadContext& p_context ) const {
+        uint entryNum = p_fileNum + MFT_FILE_OFFSET;
+        uint size = this->entrySize( entryNum, p_context );
+
+        if ( size != std::numeric_limits<uint>::max( ) ) {
+            return this->peekEntry( entryNum, size, po_Buffer, p_context );
+        }
+
+        return 0;
     }
 
     uint DatFile::readEntry( uint p_entryNum, byte* po_Buffer ) {

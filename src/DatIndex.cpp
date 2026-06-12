@@ -123,7 +123,8 @@ namespace gw2b {
         , m_highestMftEntry( -1 )
         , m_isDirty( false )
         , m_numEntries( 0 )
-        , m_numCategories( 0 ) {
+        , m_numCategories( 0 )
+        , m_suppressNotifications( false ) {
     }
 
     DatIndex::~DatIndex( ) {
@@ -195,13 +196,22 @@ namespace gw2b {
         m_categories[index] = new DatIndexCategory( *this, p_name, index );
         auto& category = *m_categories[index];
 
-        // Notify listeners
-        for ( auto const& it : m_listeners ) {
-            it->onIndexCategoryAdded( *this, category );
+        if ( !m_suppressNotifications ) {
+            for ( auto const& it : m_listeners ) {
+                it->onIndexCategoryAdded( *this, category );
+            }
         }
 
         m_isDirty = ( m_isDirty || p_setDirty );
         return &category;
+    }
+
+    void DatIndex::beginBatchUpdate( ) {
+        m_suppressNotifications = true;
+    }
+
+    void DatIndex::endBatchUpdate( ) {
+        m_suppressNotifications = false;
     }
 
     DatIndexCategory* DatIndex::findOrAddCategory( const wxString& p_name, bool p_setDirty ) {
@@ -241,9 +251,10 @@ namespace gw2b {
             m_highestMftEntry = static_cast<int>( p_entry.mftEntry( ) );
         }
 
-        // Notify listeners
-        for ( auto const& it : m_listeners ) {
-            it->onIndexFileAdded( *this, p_entry );
+        if ( !m_suppressNotifications ) {
+            for ( auto const& it : m_listeners ) {
+                it->onIndexFileAdded( *this, p_entry );
+            }
         }
     }
 

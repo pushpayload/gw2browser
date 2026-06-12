@@ -298,6 +298,7 @@ namespace gw2b {
         ListenerSet         m_listeners;
         uint                m_numEntries;
         uint                m_numCategories;
+        bool                m_suppressNotifications;
     public:
         /** Constructor. Initializes internals. */
         DatIndex( );
@@ -326,6 +327,10 @@ namespace gw2b {
         *  \param[in]  p_setDirty   true to flag this index as dirty, false to not.
         *  \return DatIndexCategory*   pointer to the found/new category. */
         DatIndexCategory* findOrAddCategory( const wxString& p_name, bool p_setDirty = true );
+        /** Suppresses listener notifications while bulk-updating the index. */
+        void beginBatchUpdate( );
+        /** Re-enables listener notifications after a bulk update. */
+        void endBatchUpdate( );
         /** Reserves memory for a given amount of entries.
         *  \param[in]  p_additionalEntries  How many additional entries to reserve
         *                                  memory for.

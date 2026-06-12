@@ -38,12 +38,26 @@ namespace gw2b {
     /** Represents a GW2 .dat file. */
     class DatFile {
         struct IdEntry;
+    public:
+        /** Per-thread state for parallel reads from the same .dat file. */
+        class ThreadContext {
+            friend class DatFile;
+        private:
+            wxFile              m_file;
+            Array<byte>         m_inputBuffer;
+            int                 m_lastReadEntry;
+        public:
+            ThreadContext( );
+            /** Opens a read handle to the same file as the given DatFile. */
+            bool open( const DatFile& p_datFile );
+        };
     private:
         typedef Array<ANetMftEntry> EntryArray;
         typedef Array<IdEntry>      EntryToIdArray;
         typedef Array<byte>         InputBufferArray;
     private:
         wxFile              m_file;
+        wxString            m_path;
         ANetDatHeader       m_datHead;
         ANetMftHeader       m_mftHead;
         EntryArray          m_mftEntries;
@@ -78,6 +92,10 @@ namespace gw2b {
         bool isOpen( ) const;
         /** Closes the open .dat file, if any. */
         void close( );
+        /** Gets the path of the currently open .dat file. */
+        const wxString& path( ) const {
+            return m_path;
+        }
 
         /** Gets the MFT entry number for the file with the given file id.
         *  \param[in]  p_fileId     ID of the file to get the entry number for.
@@ -105,10 +123,20 @@ namespace gw2b {
         *  \param[in]  p_entryNum   Entry number to check the size for.
         *  \return uint    Uncompressed size of the entry. */
         uint entrySize( uint p_entryNum );
+        /** Gets the total uncompressed size of the given entry using a per-thread context.
+        *  \param[in]  p_entryNum   Entry number to check the size for.
+        *  \param[in,out]  p_context    Per-thread read context.
+        *  \return uint    Uncompressed size of the entry. */
+        uint entrySize( uint p_entryNum, ThreadContext& p_context ) const;
         /** Gets the total uncompressed size of the given file.
         *  \param[in]  p_fileNum   File entry number to check the size for.
         *  \return uint    Uncompressed size of the file. */
         uint fileSize( uint p_fileNum );
+        /** Gets the total uncompressed size of the given file using a per-thread context.
+        *  \param[in]  p_fileNum   File entry number to check the size for.
+        *  \param[in,out]  p_context    Per-thread read context.
+        *  \return uint    Uncompressed size of the file. */
+        uint fileSize( uint p_fileNum, ThreadContext& p_context ) const;
         /** Gets the amount of total MFT entries in the .dat file.
         *  \return uint    Amount of entries in the .dat file, UINT_MAX if file not open. */
         uint numEntries( ) const {
@@ -137,6 +165,13 @@ namespace gw2b {
         *                  pPeekSize in length.
         *  \return uint    Size of poBuffer. */
         uint peekEntry( uint p_entryNum, uint p_peekSize, byte* po_buffer );
+        /** Peeks at the contents of the given MFT entry using a per-thread context.
+        *  \param[in]  p_entryNum   MFT entry number to get contents for.
+        *  \param[in]  p_peekSize   Amount of bytes to peek at.
+        *  \param[in,out]  po_buffer    Buffer to store results in.
+        *  \param[in,out]  p_context    Per-thread read context.
+        *  \return uint    Number of bytes written to po_buffer. */
+        uint peekEntry( uint p_entryNum, uint p_peekSize, byte* po_buffer, ThreadContext& p_context ) const;
         /** Peeks at the contents of the given MFT file entry and returns the results.
         *  \param[in]  p_fileNum    MFT entry number to get contents for.
         *  \param[in]  p_peekSize   Amount of bytes to peek at. Specifying 0 will read the whole file.
@@ -144,6 +179,13 @@ namespace gw2b {
         *                  pPeekSize in length.
         *  \return uint    Size of poBuffer. */
         uint peekFile( uint p_fileNum, uint p_peekSize, byte* po_buffer );
+        /** Peeks at the contents of the given MFT file entry using a per-thread context.
+        *  \param[in]  p_fileNum    MFT file entry number to get contents for.
+        *  \param[in]  p_peekSize   Amount of bytes to peek at.
+        *  \param[in,out]  po_buffer    Buffer to store results in.
+        *  \param[in,out]  p_context    Per-thread read context.
+        *  \return uint    Number of bytes written to po_buffer. */
+        uint peekFile( uint p_fileNum, uint p_peekSize, byte* po_buffer, ThreadContext& p_context ) const;
         /** Peeks at the contents of the given MFT entry and returns the results.
         *  \param[in]  p_entryNum   MFT entry number to get contents for.
         *  \param[in]  p_peekSize   Amount of bytes to peek at.
@@ -167,6 +209,12 @@ namespace gw2b {
         caller to make sure the buffer is big enough.
         *  \return uint    Size of poBuffer. */
         uint readFile( uint p_fileNum, byte* po_buffer );
+        /** Reads the contents of the given MFT file entry using a per-thread context.
+        *  \param[in]  p_fileNum   MFT file entry number to read.
+        *  \param[in,out]  po_buffer    Buffer to store results in.
+        *  \param[in,out]  p_context    Per-thread read context.
+        *  \return uint    Number of bytes written to po_buffer. */
+        uint readFile( uint p_fileNum, byte* po_buffer, ThreadContext& p_context ) const;
         /** Reads the data contained at the given MFT entry.
         *  \param[in]  p_entryNum   MFT entry number to read.
         *  \return Array<byte>  Object used to handle the read data. */
