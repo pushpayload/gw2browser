@@ -29,6 +29,7 @@
 
 #include <wx/filename.h>
 #include <set>
+#include <unordered_map>
 
 #include "ANetStructs.h"
 
@@ -289,10 +290,12 @@ namespace gw2b {
         typedef Array<DatIndexCategory*>        CategoryArray;
         typedef Array<DatIndexEntry*>           EntryArray;
         typedef std::set<IDatIndexListener*>    ListenerSet;
+        typedef std::unordered_map<uint32, DatIndexEntry*> BaseIdMap;
     private:
         CategoryArray       m_categories;
         uint64              m_datTimestamp;
         EntryArray          m_entries;
+        BaseIdMap           m_entriesByBaseId;
         int                 m_highestMftEntry;
         bool                m_isDirty;
         ListenerSet         m_listeners;
@@ -360,6 +363,10 @@ namespace gw2b {
                 return nullptr;
             } return m_entries[p_index];
         }
+        /** Finds an entry by its base ID (the numeric id shown in the tree).
+        *  \param[in]  p_baseId  Base ID to look up.
+        *  \return const DatIndexEntry*  matching entry, or nullptr if not found. */
+        const DatIndexEntry* findEntryByBaseId( uint32 p_baseId ) const;
         /** Gets the category with the given index.
         *  \param[in]  p_index  Index of the category to get.
         *  \return DatIndexCategory*   pointer to the category if valid, nullptr if not. */

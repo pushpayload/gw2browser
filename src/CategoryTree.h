@@ -143,6 +143,7 @@ namespace gw2b {
     private:
         std::shared_ptr<DatIndex>   m_index;
         ListenerSet                 m_listeners;
+        const DatIndexEntry*        m_selectiveExpandEntry = nullptr;
     public:
         /** Constructor. Creates the tree control with the given parent.
         *  \param[in]  p_parent     Parent of the control.
@@ -169,10 +170,12 @@ namespace gw2b {
         /** Gets the currently selected objects.
         *  \return Array<DatIndexEntry*>  array of entries. */
         Array<const DatIndexEntry*> getSelectedEntries( ) const;
-        /** Find entry id of given entry name.
-        *  \param[in]  p_root       Root entry.
-        *  \param[in]  p_string     Entry name to search. */
-        wxTreeItemId findEntry( wxTreeItemId p_root, const wxString& p_string );
+        /** Finds the tree item for the entry with the given display name, expanding
+        *  only the categories along its path. Searches the index data model
+        *  directly, so it does not need the whole tree to be populated.
+        *  \param[in]  p_string     Entry name to search for.
+        *  \return wxTreeItemId  the matching tree item, or an invalid id if not found. */
+        wxTreeItemId findEntry( const wxString& p_string );
 
         /** Gets the .dat file index represented by this tree. */
         std::shared_ptr<DatIndex> datIndex( ) const;
@@ -210,6 +213,14 @@ namespace gw2b {
         void buildCategorySubtree( const DatIndexCategory& p_category );
         void removeNonCategoryChildren( const wxTreeItemId& p_parent );
         void addCategoryEntriesToArray( Array<const DatIndexEntry*>& p_array, uint& p_index, const DatIndexCategory& p_category ) const;
+
+        /** Ensures the tree item for the given entry exists, expanding only the
+         *  category path and inserting just that entry at the leaf. */
+        wxTreeItemId revealEntry( const DatIndexEntry& p_entry );
+        /** Counts file-entry children under a category node. */
+        uint countEntryChildren( const wxTreeItemId& p_parent ) const;
+        /** Finds an already-populated child node for the given entry. */
+        wxTreeItemId findChildEntry( const wxTreeItemId& p_parent, const DatIndexEntry& p_entry ) const;
 
         /** Helper method to add an entry to the tree at the right spot, for sorting.
         *  \param[in]  p_parent     Category to add the entry to.

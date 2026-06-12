@@ -59,7 +59,6 @@ namespace gw2b {
         wxTextCtrl*                 m_log;
         wxLog*                      m_logTarget;
         wxTextCtrl*                 m_findTextBox;
-        bool                        m_findFirstTime = true;
 
     public:
         /** Constructs the frame with the given title and size.

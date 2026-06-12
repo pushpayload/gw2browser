@@ -148,6 +148,7 @@ namespace gw2b {
         }
         m_categories.Clear( );
 
+        m_entriesByBaseId.clear( );
         m_datTimestamp = 0;
         m_highestMftEntry = -1;
         m_isDirty = false;
@@ -251,11 +252,23 @@ namespace gw2b {
             m_highestMftEntry = static_cast<int>( p_entry.mftEntry( ) );
         }
 
+        if ( p_entry.baseId( ) != 0 ) {
+            m_entriesByBaseId[p_entry.baseId( )] = &p_entry;
+        }
+
         if ( !m_suppressNotifications ) {
             for ( auto const& it : m_listeners ) {
                 it->onIndexFileAdded( *this, p_entry );
             }
         }
+    }
+
+    const DatIndexEntry* DatIndex::findEntryByBaseId( uint32 p_baseId ) const {
+        auto it = m_entriesByBaseId.find( p_baseId );
+        if ( it == m_entriesByBaseId.end( ) ) {
+            return nullptr;
+        }
+        return it->second;
     }
 
 };

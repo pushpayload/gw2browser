@@ -26,6 +26,8 @@
 
 #include "stdafx.h"
 
+#include <vector>
+
 #include "Data.h"
 #include "Exporter.h"
 
@@ -366,30 +368,106 @@ namespace gw2b {
 
     //============================================================================/
 
-    wxTreeItemId CategoryTree::findEntry( wxTreeItemId p_root, const wxString& p_string ) {
-        wxTreeItemId item = p_root;
-        wxTreeItemId child;
-        wxTreeItemIdValue cookie;
-        wxString findtext( p_string );
-        wxString itemtext;
+    wxTreeItemId CategoryTree::findEntry( const wxString& p_string ) {
+        if ( !m_index ) {
+            return wxTreeItemId( );
+        }
 
-        while ( item.IsOk( ) ) {
-            itemtext = this->GetItemText( item );
-            // Found
-            if ( itemtext == findtext ) {
-                return item;
+        ulong baseId = 0;
+        if ( !p_string.ToULong( &baseId ) ) {
+            return wxTreeItemId( );
+        }
+
+        auto found = m_index->findEntryByBaseId( static_cast<uint32>( baseId ) );
+        if ( !found ) {
+            return wxTreeItemId( );
+        }
+
+        return this->revealEntry( *found );
+    }
+
+    //============================================================================/
+
+    wxTreeItemId CategoryTree::revealEntry( const DatIndexEntry& p_entry ) {
+        auto category = p_entry.category( );
+        if ( !category ) {
+            return wxTreeItemId( );
+        }
+
+        // Build the chain of categories from the entry's category up to the root.
+        std::vector<const DatIndexCategory*> chain;
+        for ( auto current = category; current != nullptr; current = current->parent( ) ) {
+            chain.push_back( current );
+        }
+
+        // Walk top-down, ensuring each category node exists. Expand ancestors so
+        // the path is visible, but defer expanding the leaf until we know whether
+        // we can insert only the target entry.
+        wxTreeItemId categoryItem;
+        for ( auto it = chain.rbegin( ); it != chain.rend( ); ++it ) {
+            const bool isLeaf = ( it + 1 == chain.rend( ) );
+            categoryItem = this->ensureHasCategory( **it, true );
+            if ( !categoryItem.IsOk( ) ) {
+                return wxTreeItemId( );
             }
-            child = this->GetFirstChild( item, cookie );
-            if ( child.IsOk( ) ) {
-                child = this->findEntry( child, p_string );
+
+            if ( !isLeaf && !this->IsExpanded( categoryItem ) ) {
+                this->Expand( categoryItem );
             }
-            if ( child.IsOk( ) ) {
+        }
+
+        auto existing = this->findChildEntry( categoryItem, p_entry );
+        if ( existing.IsOk( ) ) {
+            if ( !this->IsExpanded( categoryItem ) ) {
+                m_selectiveExpandEntry = &p_entry;
+                this->Expand( categoryItem );
+                m_selectiveExpandEntry = nullptr;
+            }
+            return existing;
+        }
+
+        // Expanding a dirty leaf category would populate every sibling entry.
+        // Insert only the target entry and use selective expand instead.
+        m_selectiveExpandEntry = &p_entry;
+        this->Expand( categoryItem );
+        m_selectiveExpandEntry = nullptr;
+
+        return this->findChildEntry( categoryItem, p_entry );
+    }
+
+    //============================================================================/
+
+    uint CategoryTree::countEntryChildren( const wxTreeItemId& p_parent ) const {
+        uint count = 0;
+        wxTreeItemIdValue cookie;
+        auto child = this->GetFirstChild( p_parent, cookie );
+
+        while ( child.IsOk( ) ) {
+            auto data = static_cast<const CategoryTreeItem*>( this->GetItemData( child ) );
+            if ( data && data->dataType( ) == CategoryTreeItem::DT_Entry ) {
+                count++;
+            }
+            child = this->GetNextChild( p_parent, cookie );
+        }
+
+        return count;
+    }
+
+    //============================================================================/
+
+    wxTreeItemId CategoryTree::findChildEntry( const wxTreeItemId& p_parent, const DatIndexEntry& p_entry ) const {
+        wxTreeItemIdValue cookie;
+        auto child = this->GetFirstChild( p_parent, cookie );
+
+        while ( child.IsOk( ) ) {
+            auto data = static_cast<const CategoryTreeItem*>( this->GetItemData( child ) );
+            if ( data && data->dataType( ) == CategoryTreeItem::DT_Entry && data->data( ) == &p_entry ) {
                 return child;
             }
-            item = this->GetNextSibling( item );
+            child = this->GetNextChild( p_parent, cookie );
         }
-        // Not found
-        return item;
+
+        return wxTreeItemId( );
     }
 
     //============================================================================/
@@ -567,19 +645,42 @@ namespace gw2b {
         // Give it the open folder icon instead
         this->SetItemImage( id, CategoryTreeImageList::IT_OpenFolder );
 
-        // Skip if the category isn't dirty
-        if ( !itemData->isDirty( ) ) {
-            return;
-        }
-
-        // Remove stale file entries and wx placeholder nodes, keep subcategory folders
-        this->removeNonCategoryChildren( id );
-
         // Fetch the category info
         auto category = static_cast<const DatIndexCategory*>( itemData->data( ) );
         if ( !category ) {
             return;
         }
+
+        // Selective expand: only insert the entry being searched for.
+        if ( m_selectiveExpandEntry && m_selectiveExpandEntry->category( ) == category ) {
+            this->removeNonCategoryChildren( id );
+
+            auto node = this->addEntry( id, *m_selectiveExpandEntry );
+            this->SetItemData( node, new CategoryTreeItem( CategoryTreeItem::DT_Entry, m_selectiveExpandEntry ) );
+
+            for ( uint i = 0; i < category->numSubCategories( ); i++ ) {
+                auto subcategory = category->subCategory( i );
+                if ( subcategory ) {
+                    this->ensureHasCategory( *subcategory, true );
+                }
+            }
+
+            itemData->setDirty( false );
+            return;
+        }
+
+        // A category revealed by find may contain only the matched entry. If the
+        // user expands it later, load the remaining entries then.
+        if ( !itemData->isDirty( ) ) {
+            if ( this->countEntryChildren( id ) < category->numEntries( ) ) {
+                itemData->setDirty( true );
+            } else {
+                return;
+            }
+        }
+
+        // Remove stale file entries and wx placeholder nodes, keep subcategory folders
+        this->removeNonCategoryChildren( id );
 
         // Add all contained entries
         for ( uint i = 0; i < category->numEntries( ); i++ ) {

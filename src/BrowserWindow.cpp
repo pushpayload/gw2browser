@@ -273,9 +273,6 @@ namespace gw2b {
         m_uiManager.GetPane(wxT("gl_content")).Hide();
         m_uiManager.GetPane(wxT("panel_content")).Show();
         m_uiManager.Update();
-
-        // Fix bug when open other dat file and find by file id not working.
-        m_findFirstTime = true;
     }
 
     //============================================================================/
@@ -638,31 +635,17 @@ namespace gw2b {
     }
 
     void BrowserWindow::onFindFile( ) {
-        wxArrayTreeItemIds Selections;
-        wxTreeItemId item;
-        wxTreeItemIdValue cookie;
-
-        if ( m_findFirstTime ) {
-            // Warning: This would slow down the browser, only use on first time
-            m_catTree->ExpandAll( );
-            m_catTree->CollapseAll( );
-
-            m_findFirstTime = false;
-        }
-
         wxString value = m_findTextBox->GetValue( );
         if ( value.IsEmpty( ) || !value.IsNumber( ) ) {
             wxMessageBox( wxT( "Please enter file id in number." ), wxT( " " ), wxOK | wxICON_EXCLAMATION, this );
             return;
         }
 
-        //if ( m_catTree->GetSelections( Selections ) ) {
-        //  item = Selections[0];
-        //} else {
-            item = m_catTree->GetFirstChild( m_catTree->GetRootItem( ), cookie );
-        //}
+        // Freeze the tree while we expand the path to the entry, to avoid flicker.
+        m_catTree->Freeze( );
+        auto item = m_catTree->findEntry( value );
+        m_catTree->Thaw( );
 
-        item = m_catTree->findEntry( item, value );
         if ( !item.IsOk( ) ) {
             wxMessageBox( wxString::Format( "Cannot Find file id \"%s\".", value ), wxT( " " ), wxOK | wxICON_EXCLAMATION, this );
             return;
