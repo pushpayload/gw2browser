@@ -33,6 +33,12 @@
 #include <wx/splitter.h>
 #include <wx/aboutdlg.h>
 
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <vector>
+
 #include "CategoryTree.h"
 #include "DatFile.h"
 #include "PreviewPanel.h"
@@ -44,6 +50,72 @@ namespace gw2b {
     class PreviewGLCanvas;
     class ProgressStatusBar;
     class Task;
+
+    /** Event raised (on the UI thread) when an async file load completes. */
+    wxDECLARE_EVENT( EVT_FILE_LOADED, wxThreadEvent );
+
+    /** Result of an asynchronous file load, carried by EVT_FILE_LOADED. */
+    struct FileLoadResult {
+        uint                generation = 0;     /**< Request id, for discarding stale loads. */
+        uint                fileNum = 0;        /**< MFT file entry number. */
+        ANetFileType        fileType = ANFT_Unknown;
+        wxString            name;               /**< Display name of the entry. */
+        std::vector<byte>   data;               /**< Decompressed file contents. */
+        bool                success = false;
+    };
+
+    /** Reads files from a DatFile on a dedicated worker thread so the UI does not
+    *   block while the data is fetched and decompressed. Only the most recent
+    *   request matters; older in-flight loads are superseded and discarded by the
+    *   sink via the generation counter. The completed bytes are delivered to the
+    *   given sink on the UI thread through an EVT_FILE_LOADED event. */
+    class AsyncFileLoader {
+    public:
+        /** Constructor. Starts the worker thread (idle until a request arrives).
+        *  \param[in]  p_datFile    .dat file to read from (must outlive this object).
+        *  \param[in]  p_sink       Handler that receives EVT_FILE_LOADED events. */
+        AsyncFileLoader( DatFile& p_datFile, wxEvtHandler* p_sink );
+        /** Destructor. Stops and joins the worker thread. */
+        ~AsyncFileLoader( );
+
+        /** Queues an asynchronous load, superseding any pending request.
+        *  \return uint    Generation assigned to this request. */
+        uint request( uint p_fileNum, ANetFileType p_fileType, const wxString& p_name );
+        /** Gets the most recent generation handed out. */
+        uint currentGeneration( ) const {
+            return m_generation.load( );
+        }
+        /** Cancels any pending request and blocks until an in-progress read (if
+        *  any) finishes. Used before mutating the DatFile (e.g. opening a new one). */
+        void cancelAndWait( );
+
+    private:
+        void workerMain( );
+
+        DatFile&                    m_datFile;
+        wxEvtHandler*               m_sink;
+
+        std::thread                 m_thread;
+        std::mutex                  m_mutex;
+        std::condition_variable     m_cv;
+        std::condition_variable     m_idleCv;
+
+        bool                        m_stop = false;
+        bool                        m_hasRequest = false;
+        bool                        m_busy = false;
+
+        uint                        m_reqFileNum = 0;
+        ANetFileType                m_reqFileType = ANFT_Unknown;
+        wxString                    m_reqName;
+        uint                        m_reqGeneration = 0;
+
+        std::atomic<uint>           m_generation{ 0 };
+
+        // Worker-thread owned read state.
+        DatFile::ThreadContext      m_context;
+        wxString                    m_contextPath;
+        bool                        m_contextReady = false;
+    }; // class AsyncFileLoader
 
     /** Represents the browser's main window. */
     class BrowserWindow : public wxFrame, public ICategoryTreeListener {
@@ -59,6 +131,7 @@ namespace gw2b {
         wxTextCtrl*                 m_log;
         wxLog*                      m_logTarget;
         wxTextCtrl*                 m_findTextBox;
+        AsyncFileLoader             m_fileLoader;
 
     public:
         /** Constructs the frame with the given title and size.
@@ -127,6 +200,14 @@ namespace gw2b {
 
         /** Raised when the index has been read. */
         void onReadIndexComplete( );
+        /** Raised on the UI thread when an async file load finishes.
+        *  \param[in]  p_event  Thread event carrying a FileLoadResult payload. */
+        void onFileLoaded( wxThreadEvent& p_event );
+        /** Builds and shows the appropriate viewer for already-read file data.
+        *  \param[in]  p_fileType   File type of the data.
+        *  \param[in]  p_data       Decompressed file contents. */
+        void displayLoadedFile( ANetFileType p_fileType, const Array<byte>& p_data );
+
         /** Raised when the .dat has finished indexing. */
         void onScanTaskComplete( );
         /** Raised when the write task has finished, if invoked from onCloseEvt. */

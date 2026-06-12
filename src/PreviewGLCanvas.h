@@ -77,6 +77,12 @@ namespace gw2b {
         *  \param[in]  p_entry      Entry to preview.
         *  \return bool    true if successful, false if not. */
         bool previewFile( DatFile& p_datFile, const DatIndexEntry& p_entry );
+        /** Tells this GLCanvas to preview already-read file data.
+        *  \param[in]  p_datFile    .dat file the data came from.
+        *  \param[in]  p_fileType   File type of the data.
+        *  \param[in]  p_data       Decompressed file contents.
+        *  \return bool    true if successful, false if not. */
+        bool previewData( DatFile& p_datFile, ANetFileType p_fileType, const Array<byte>& p_data );
         /** Clear the viewer. */
         void clear( );
         /** Initialize the GLCanvas. */

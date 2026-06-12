@@ -52,12 +52,16 @@ namespace gw2b {
 
     bool PreviewPanel::previewFile( DatFile& p_datFile, const DatIndexEntry& p_entry ) {
         auto entryData = p_datFile.readFile( p_entry.mftEntry( ) );
-        if ( !entryData.GetSize( ) ) {
+        return this->previewData( p_datFile, p_entry.fileType( ), entryData );
+    }
+
+    bool PreviewPanel::previewData( DatFile& p_datFile, ANetFileType p_fileType, const Array<byte>& p_data ) {
+        if ( !p_data.GetSize( ) ) {
             return false;
         }
 
         // Create file reader
-        auto reader = FileReader::readerForData( entryData, p_datFile, p_entry.fileType( ) );
+        auto reader = FileReader::readerForData( p_data, p_datFile, p_fileType );
 
         if ( reader ) {
             if ( m_currentView ) {

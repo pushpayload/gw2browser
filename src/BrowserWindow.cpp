@@ -48,6 +48,8 @@
 
 namespace gw2b {
 
+    wxDEFINE_EVENT( EVT_FILE_LOADED, wxThreadEvent );
+
     BrowserWindow::BrowserWindow( const wxString& p_title, const wxSize p_size )
         : wxFrame( nullptr, wxID_ANY, p_title, wxDefaultPosition, p_size )
         , m_index( std::make_shared<DatIndex>( ) )
@@ -55,7 +57,8 @@ namespace gw2b {
         , m_currentTask( nullptr )
         , m_catTree( nullptr )
         , m_previewPanel( nullptr )
-        , m_previewGLCanvas( nullptr ) {
+        , m_previewGLCanvas( nullptr )
+        , m_fileLoader( m_datFile, this ) {
         // Initializes all available image handlers
         wxInitAllImageHandlers( );
         // Notify wxAUI which frame to use
@@ -202,6 +205,7 @@ namespace gw2b {
         this->Bind( wxEVT_TEXT_ENTER, &BrowserWindow::onEnterPressedInSrchBoxEvt, this );
         this->Bind( wxEVT_AUI_PANE_CLOSE, &BrowserWindow::onPaneCloseEvt, this );
         this->Bind( wxEVT_CLOSE_WINDOW, &BrowserWindow::onCloseEvt, this );
+        this->Bind( EVT_FILE_LOADED, &BrowserWindow::onFileLoaded, this );
     }
 
     //============================================================================/
@@ -247,6 +251,9 @@ namespace gw2b {
     //============================================================================/
 
     void BrowserWindow::openFile( const wxString& p_path ) {
+        // Make sure no background read is touching the .dat while we re-open it.
+        m_fileLoader.cancelAndWait( );
+
         // Try to open the file
         if ( !m_datFile.open( p_path ) ) {
             wxMessageBox( wxString::Format( wxT( "Failed to open file: %s" ), p_path ),
@@ -278,24 +285,177 @@ namespace gw2b {
     //============================================================================/
 
     void BrowserWindow::viewEntry( const DatIndexEntry& p_entry ) {
-        switch ( p_entry.fileType( ) ) {
+        // Decouple selection from loading: read (and decompress) the file on a
+        // worker thread. The viewer is built when the data arrives, in
+        // onFileLoaded( ). This keeps the UI responsive and lets rapid selection
+        // changes supersede slower, no-longer-wanted loads.
+        m_fileLoader.request( p_entry.mftEntry( ), p_entry.fileType( ), p_entry.name( ) );
+        m_progress->SetStatusText( wxString::Format( wxT( "Loading %s..." ), p_entry.name( ) ) );
+    }
+
+    //============================================================================/
+
+    void BrowserWindow::onFileLoaded( wxThreadEvent& p_event ) {
+        auto result = p_event.GetPayload<std::shared_ptr<FileLoadResult>>( );
+        if ( !result ) {
+            return;
+        }
+
+        // Discard results superseded by a more recent selection.
+        if ( result->generation != m_fileLoader.currentGeneration( ) ) {
+            return;
+        }
+
+        m_progress->SetStatusText( wxEmptyString );
+
+        if ( !result->success || result->data.empty( ) ) {
+            return;
+        }
+
+        // Wrap the bytes into an Array on the UI thread, avoiding any cross-thread
+        // reference counting of the shared Array type.
+        Array<byte> data( result->data.size( ) );
+        ::memcpy( data.GetPointer( ), result->data.data( ), result->data.size( ) );
+
+        this->displayLoadedFile( result->fileType, data );
+    }
+
+    //============================================================================/
+
+    void BrowserWindow::displayLoadedFile( ANetFileType p_fileType, const Array<byte>& p_data ) {
+        switch ( p_fileType ) {
         //case ANFT_MapParam:
         case ANFT_Model:
-            if ( m_previewGLCanvas->previewFile( m_datFile, p_entry ) ) {
+            if ( m_previewGLCanvas && m_previewGLCanvas->previewData( m_datFile, p_fileType, p_data ) ) {
                 m_previewPanel->destroyViewer( );
                 m_uiManager.GetPane( wxT( "panel_content" ) ).Hide( );
                 m_uiManager.GetPane( wxT( "gl_content" ) ).Show( );
             }
             break;
         default:
-            if ( m_previewPanel->previewFile( m_datFile, p_entry ) ) {
+            if ( m_previewPanel->previewData( m_datFile, p_fileType, p_data ) ) {
                 // Clear the OpenGL canvas to reduce memory usage
-                m_previewGLCanvas->clear( );
+                if ( m_previewGLCanvas ) {
+                    m_previewGLCanvas->clear( );
+                }
                 m_uiManager.GetPane( wxT( "gl_content" ) ).Hide( );
                 m_uiManager.GetPane( wxT( "panel_content" ) ).Show( );
             }
         }
         m_uiManager.Update( );
+    }
+
+    //============================================================================/
+
+    AsyncFileLoader::AsyncFileLoader( DatFile& p_datFile, wxEvtHandler* p_sink )
+        : m_datFile( p_datFile )
+        , m_sink( p_sink ) {
+        m_thread = std::thread( &AsyncFileLoader::workerMain, this );
+    }
+
+    //============================================================================/
+
+    AsyncFileLoader::~AsyncFileLoader( ) {
+        {
+            std::lock_guard<std::mutex> lock( m_mutex );
+            m_stop = true;
+            m_hasRequest = false;
+        }
+        m_cv.notify_all( );
+        if ( m_thread.joinable( ) ) {
+            m_thread.join( );
+        }
+    }
+
+    //============================================================================/
+
+    uint AsyncFileLoader::request( uint p_fileNum, ANetFileType p_fileType, const wxString& p_name ) {
+        uint generation = ++m_generation;
+        {
+            std::lock_guard<std::mutex> lock( m_mutex );
+            m_reqFileNum = p_fileNum;
+            m_reqFileType = p_fileType;
+            // Force a deep copy so the worker never shares a string buffer with
+            // the UI thread.
+            m_reqName = wxString( p_name.c_str( ) );
+            m_reqGeneration = generation;
+            m_hasRequest = true;
+        }
+        m_cv.notify_one( );
+        return generation;
+    }
+
+    //============================================================================/
+
+    void AsyncFileLoader::cancelAndWait( ) {
+        std::unique_lock<std::mutex> lock( m_mutex );
+        m_hasRequest = false;
+        // Bump the generation so any in-flight result is discarded by the sink.
+        ++m_generation;
+        m_idleCv.wait( lock, [this] { return !m_busy; } );
+    }
+
+    //============================================================================/
+
+    void AsyncFileLoader::workerMain( ) {
+        for ( ;; ) {
+            uint fileNum;
+            ANetFileType fileType;
+            wxString name;
+            uint generation;
+
+            {
+                std::unique_lock<std::mutex> lock( m_mutex );
+                m_cv.wait( lock, [this] { return m_hasRequest || m_stop; } );
+                if ( m_stop ) {
+                    return;
+                }
+                fileNum = m_reqFileNum;
+                fileType = m_reqFileType;
+                name = wxString( m_reqName.c_str( ) );
+                generation = m_reqGeneration;
+                m_hasRequest = false;
+                m_busy = true;
+            }
+
+            // (Re)open the per-thread read context if the .dat changed.
+            if ( !m_contextReady || m_contextPath != m_datFile.path( ) ) {
+                m_contextReady = m_context.open( m_datFile );
+                m_contextPath = wxString( m_datFile.path( ).c_str( ) );
+            }
+
+            auto result = std::make_shared<FileLoadResult>( );
+            result->generation = generation;
+            result->fileNum = fileNum;
+            result->fileType = fileType;
+            result->name = name;
+            result->success = false;
+
+            if ( m_contextReady ) {
+                uint size = m_datFile.fileSize( fileNum, m_context );
+                if ( size > 0 && size != UINT_MAX ) {
+                    result->data.resize( size );
+                    uint read = m_datFile.readFile( fileNum, result->data.data( ), m_context );
+                    if ( read > 0 ) {
+                        result->data.resize( read );
+                        result->success = true;
+                    } else {
+                        result->data.clear( );
+                    }
+                }
+            }
+
+            // Hand the result back to the UI thread.
+            auto evt = new wxThreadEvent( EVT_FILE_LOADED );
+            evt->SetPayload( result );
+            m_sink->QueueEvent( evt );
+
+            {
+                std::lock_guard<std::mutex> lock( m_mutex );
+                m_busy = false;
+            }
+            m_idleCv.notify_all( );
+        }
     }
 
     //============================================================================/

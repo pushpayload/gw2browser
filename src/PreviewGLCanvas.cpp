@@ -122,15 +122,19 @@ namespace gw2b {
     }
 
     bool PreviewGLCanvas::previewFile( DatFile& p_datFile, const DatIndexEntry& p_entry ) {
+        auto entryData = p_datFile.readFile( p_entry.mftEntry( ) );
+        return this->previewData( p_datFile, p_entry.fileType( ), entryData );
+    }
+
+    bool PreviewGLCanvas::previewData( DatFile& p_datFile, ANetFileType p_fileType, const Array<byte>& p_data ) {
         this->clear( );
 
-        auto entryData = p_datFile.readFile( p_entry.mftEntry( ) );
-        if ( !entryData.GetSize( ) ) {
+        if ( !p_data.GetSize( ) ) {
             return false;
         }
 
         // Create file reader
-        m_reader = FileReader::readerForData( entryData, p_datFile, p_entry.fileType( ) );
+        m_reader = FileReader::readerForData( p_data, p_datFile, p_fileType );
         if ( m_reader ) {
             switch ( m_reader->dataType( ) ) {
             //case FileReader::DT_Map:
