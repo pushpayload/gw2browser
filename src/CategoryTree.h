@@ -179,6 +179,9 @@ namespace gw2b {
         /** Sets the .dat file index represented by this tree.
         *  \param[in]  p_index  Index this tree should represent. */
         void setDatIndex( const std::shared_ptr<DatIndex>& p_index );
+        /** Rebuilds the category folder tree after a bulk index update.
+         *  File entries are loaded lazily when a category is expanded. */
+        void refreshAfterBulkUpdate( );
 
         /** Adds an event listener to this tree.
         *  \param  pListener   Pointer to the listener to add. */
@@ -203,6 +206,8 @@ namespace gw2b {
         *  \param[in]  item1, item2 Items to compare. */
         virtual int OnCompareItems( const wxTreeItemId& p_item1, const wxTreeItemId& p_item2 );
     private:
+        void buildCategoryTreeFromIndex( );
+        void buildCategorySubtree( const DatIndexCategory& p_category );
         void addCategoryEntriesToArray( Array<const DatIndexEntry*>& p_array, uint& p_index, const DatIndexCategory& p_category ) const;
 
         /** Helper method to add an entry to the tree at the right spot, for sorting.

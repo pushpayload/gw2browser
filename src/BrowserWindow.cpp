@@ -508,13 +508,15 @@ namespace gw2b {
         auto isComplete = ( m_index->highestMftEntry( ) == m_datFile.numFiles( ) );
         if ( !isComplete ) {
             this->indexDat( );
+        } else {
+            m_catTree->refreshAfterBulkUpdate( );
         }
     }
 
     //============================================================================/
 
     void BrowserWindow::onScanTaskComplete( ) {
-        m_catTree->setDatIndex( m_index );
+        m_catTree->refreshAfterBulkUpdate( );
 
         auto writeTask = new WriteIndexTask( m_index, this->findDatIndex( ).GetFullPath( ) );
         this->performTask( writeTask );

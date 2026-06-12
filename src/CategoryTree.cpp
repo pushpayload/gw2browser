@@ -407,20 +407,65 @@ namespace gw2b {
 
     //============================================================================/
 
+    void CategoryTree::buildCategorySubtree( const DatIndexCategory& p_category ) {
+        this->ensureHasCategory( p_category, true );
+
+        for ( uint i = 0; i < p_category.numSubCategories( ); i++ ) {
+            auto subCategory = p_category.subCategory( i );
+            if ( subCategory ) {
+                this->buildCategorySubtree( *subCategory );
+            }
+        }
+    }
+
+    //============================================================================/
+
+    void CategoryTree::buildCategoryTreeFromIndex( ) {
+        this->Freeze( );
+
+        this->clearEntries( );
+
+        if ( m_index ) {
+            for ( uint i = 0; i < m_index->numCategories( ); i++ ) {
+                auto category = m_index->category( i );
+                if ( category && !category->parent( ) ) {
+                    this->buildCategorySubtree( *category );
+                }
+            }
+        }
+
+        this->Thaw( );
+    }
+
+    //============================================================================/
+
+    void CategoryTree::refreshAfterBulkUpdate( ) {
+        this->buildCategoryTreeFromIndex( );
+    }
+
+    //============================================================================/
+
     void CategoryTree::setDatIndex( const std::shared_ptr<DatIndex>& p_index ) {
         if ( m_index ) {
             m_index->removeListener( this );
         }
 
-        this->clearEntries( );
         m_index = p_index;
 
         if ( m_index ) {
             m_index->addListener( this );
 
-            for ( uint i = 0; i < m_index->numEntries( ); i++ ) {
-                this->addEntry( *m_index->entry( i ) );
+            if ( m_index->numEntries( ) > 500 ) {
+                this->buildCategoryTreeFromIndex( );
+            } else {
+                this->clearEntries( );
+
+                for ( uint i = 0; i < m_index->numEntries( ); i++ ) {
+                    this->addEntry( *m_index->entry( i ) );
+                }
             }
+        } else {
+            this->clearEntries( );
         }
     }
 
