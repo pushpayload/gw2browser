@@ -1,0 +1,32 @@
+---
+# Gw2Browser formatting (Rhoot / kytulendu MSVC style)
+BasedOnStyle: LLVM
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+ColumnLimit: 0
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+NamespaceIndentation: All
+IndentAccessModifiers: false
+PointerAlignment: Left
+ReferenceAlignment: Left
+SpaceBeforeParens: ControlStatements
+SpacesInParentheses: true
+SpacesInAngles: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeCpp11BracedList: false
+SpaceInEmptyParentheses: true
+SpacesInCStyleCastParentheses: false
+SpacesInContainerLiterals: true
+Cpp11BracedListStyle: true
+BreakConstructorInitializers: BeforeComma
+ConstructorInitializerIndentWidth: 8
+ContinuationIndentWidth: 4
+IndentCaseLabels: false
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+SortIncludes: false
+...

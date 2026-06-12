@@ -1,35 +1,91 @@
-# Binaries
-bin
-bin.gcc
-bind
-build
-obj
-objs
-share
-tmp
-extern/freetype/build
-extern/glew/lib
-extern/libogg/build
-extern/libvorbis/build
-extern/libwebp/build
-extern/tinyxml2/build
+# Local install prefix (gw2dattools, gw2formats, wxWidgets, etc.)
+deps/
+
+# Top-level build output
+build/
+bin/
+bin.gcc/
+bind/
+obj/
+objs/
+share/
+tmp/
+
+# Dependencies downloaded by build-linux.sh (not vendored submodules)
+extern/wxWidgets/
+extern/openal-soft/
+extern/mpg123/
+
+# CMake out-of-tree build dirs under extern
+extern/gw2dattools/build/
+extern/gw2formats/build/
+extern/glew/build/
+extern/freetype/build/
+extern/libogg/build/
+extern/libvorbis/build/
+extern/libwebp/build/
+extern/tinyxml2/build/
+extern/wxWidgets/build-cmake/
+
+# GLEW shipped binaries (Windows)
+extern/glew/lib/
+
+# Autotools products from in-tree ./configure && make
+extern/**/autom4te.cache/
+extern/**/.deps/
+extern/**/.libs/
+extern/**/config.status
+extern/**/config.log
+extern/**/libtool
+extern/**/stamp-h1
+extern/**/config.h
+extern/**/configure.lineno
+extern/**/configure~
+extern/**/config.h.in~
+extern/**/*.lo
+extern/**/*.la
+extern/**/Makefile
+!extern/**/Makefile.in
+!extern/**/Makefile.am
+extern/libogg/include/ogg/config_types.h
+extern/libogg/src/test_bitwise
+extern/libogg/src/test_framing
+extern/libvorbis/lib/test_sharedbook
+extern/libvorbis/doc/Doxyfile
+extern/libvorbis/doc/doxygen-build.stamp
+
+# Compiled objects and binaries
 *.o
 *.a
 *.exe
+*.so
+*.so.*
+*.dylib
+
+# CMake generated files
+**/CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile.cmake
+compile_commands.json
+build.ninja
+.ninja_deps
+.ninja_log
 
 # CodeBlocks
 *.depend
 *.layout
 
 # Visual Studio
-.vs
-ipch
-Debug
-Debug_x86
-Debug_x64
-Release
-Release_x86
-Release_x64
+.vs/
+ipch/
+Debug/
+Debug_x86/
+Debug_x64/
+Release/
+Release_x86/
+Release_x64/
 *.aps
 *.sdf
 *.suo
@@ -42,15 +98,10 @@ Release_x64
 *.vsps
 *.vspx
 
-# Cmake
-CMakeFiles
-CMakeCache.txt
-*.cmake
-
 # File manager
 .directory
 
 # Misc
-doxygen
+doxygen/
 *.bak
 *.pc

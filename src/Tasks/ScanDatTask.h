@@ -31,10 +31,10 @@
 #include <vector>
 
 #include "ANetStructs.h"
+#include "DatFile.h"
 #include "Task.h"
 
 namespace gw2b {
-    class DatFile;
     class DatIndex;
     class DatIndexCategory;
 

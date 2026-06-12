@@ -30,6 +30,8 @@
 
 #include "FileReader.h"
 
+#include <vector>
+
 namespace gw2b {
 
     struct Glyph {
