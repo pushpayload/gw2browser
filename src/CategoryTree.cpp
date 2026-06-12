@@ -142,7 +142,7 @@ namespace gw2b {
 
         // Determine parent node
         if ( p_category.parent( ) ) {
-            parent = this->ensureHasCategory( *p_category.parent( ) );
+            parent = this->ensureHasCategory( *p_category.parent( ), p_force );
         } else {
             parent = this->GetRootItem( );
             parentIsRoot = true;
@@ -153,6 +153,8 @@ namespace gw2b {
             if ( !parentIsRoot && ( !parent.IsOk( ) || !this->IsExpanded( parent ) ) ) {
                 return wxTreeItemId( );
             }
+        } else if ( !parent.IsOk( ) ) {
+            return wxTreeItemId( );
         }
 
         wxTreeItemIdValue cookie;
