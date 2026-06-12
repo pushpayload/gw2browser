@@ -32,6 +32,7 @@
 #include <wx/imaglist.h>
 #include <wx/treectrl.h>
 #include <set>
+#include <unordered_set>
 
 #include "DatIndex.h"
 
@@ -130,6 +131,22 @@ namespace gw2b {
         *  \param[in]  p_tree   category tree invoking the callback. */
         virtual void onTreeCleared( CategoryTree& p_tree ) {
         }
+        /** Raised when the tree begins loading a category's entries in the
+        *  background (e.g. after a find).
+        *  \param[in]  p_tree   category tree invoking the callback.
+        *  \param[in]  p_total  total number of entries to load. */
+        virtual void onTreeBackgroundLoadBegin( CategoryTree& p_tree, uint p_total ) {
+        }
+        /** Raised periodically while loading a category's entries in the background.
+        *  \param[in]  p_tree     category tree invoking the callback.
+        *  \param[in]  p_current  number of entries processed so far.
+        *  \param[in]  p_total    total number of entries to load. */
+        virtual void onTreeBackgroundLoadUpdate( CategoryTree& p_tree, uint p_current, uint p_total ) {
+        }
+        /** Raised when the background load finishes or is cancelled.
+        *  \param[in]  p_tree   category tree invoking the callback. */
+        virtual void onTreeBackgroundLoadEnd( CategoryTree& p_tree ) {
+        }
         /** Raised when the category tree is being destroyed.
         *  \param[in]  p_tree   category tree invoking the callback. */
         virtual void onTreeDestruction( CategoryTree& p_tree ) {
@@ -144,6 +161,15 @@ namespace gw2b {
         std::shared_ptr<DatIndex>   m_index;
         ListenerSet                 m_listeners;
         const DatIndexEntry*        m_selectiveExpandEntry = nullptr;
+
+        // Background fill state. After a find reveals a single entry, the rest of
+        // that category's entries are loaded incrementally on idle so the UI does
+        // not freeze.
+        bool                        m_bgFillActive = false;
+        wxTreeItemId                m_bgFillItem;
+        const DatIndexCategory*     m_bgFillCategory = nullptr;
+        uint                        m_bgFillNext = 0;
+        std::unordered_set<const void*> m_bgFillPresent;
     public:
         /** Constructor. Creates the tree control with the given parent.
         *  \param[in]  p_parent     Parent of the control.
@@ -221,6 +247,13 @@ namespace gw2b {
         uint countEntryChildren( const wxTreeItemId& p_parent ) const;
         /** Finds an already-populated child node for the given entry. */
         wxTreeItemId findChildEntry( const wxTreeItemId& p_parent, const DatIndexEntry& p_entry ) const;
+        /** Starts loading the remaining entries of a category incrementally on
+         *  idle, skipping any that are already present. */
+        void beginBackgroundFill( const wxTreeItemId& p_item, const DatIndexCategory& p_category );
+        /** Cancels any in-progress background fill. */
+        void cancelBackgroundFill( );
+        /** Idle handler that appends a batch of pending entries. */
+        void onIdleFill( wxIdleEvent& p_event );
 
         /** Helper method to add an entry to the tree at the right spot, for sorting.
         *  \param[in]  p_parent     Category to add the entry to.

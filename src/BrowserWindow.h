@@ -143,6 +143,18 @@ namespace gw2b {
         /** Raised when the category tree was cleared.
         *  \param[in]  p_tree   tree that was cleared. */
         virtual void onTreeCleared( CategoryTree& p_tree ) override;
+        /** Raised when the tree begins loading a category in the background.
+        *  \param[in]  p_tree   tree that raised the event.
+        *  \param[in]  p_total  total number of entries to load. */
+        virtual void onTreeBackgroundLoadBegin( CategoryTree& p_tree, uint p_total ) override;
+        /** Raised periodically while the tree loads a category in the background.
+        *  \param[in]  p_tree     tree that raised the event.
+        *  \param[in]  p_current  number of entries processed so far.
+        *  \param[in]  p_total    total number of entries to load. */
+        virtual void onTreeBackgroundLoadUpdate( CategoryTree& p_tree, uint p_current, uint p_total ) override;
+        /** Raised when the tree's background load finishes or is cancelled.
+        *  \param[in]  p_tree   tree that raised the event. */
+        virtual void onTreeBackgroundLoadEnd( CategoryTree& p_tree ) override;
         /** Raised when the user wants to extract raw files.
         *  \param[in]  p_tree   category tree invoking the callback.
         *  \param[in]  p_mode   if false extract raw file, if true extract converted file. */

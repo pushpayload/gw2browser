@@ -555,6 +555,37 @@ namespace gw2b {
 
     //============================================================================/
 
+    void BrowserWindow::onTreeBackgroundLoadBegin( CategoryTree& p_tree, uint p_total ) {
+        // Don't fight an active task for the progress bar.
+        if ( m_currentTask ) {
+            return;
+        }
+        m_progress->setMaxValue( p_total );
+        m_progress->showProgressBar( );
+        m_progress->update( 0, wxString::Format( wxT( "Loading entries: 0/%u" ), p_total ) );
+    }
+
+    //============================================================================/
+
+    void BrowserWindow::onTreeBackgroundLoadUpdate( CategoryTree& p_tree, uint p_current, uint p_total ) {
+        if ( m_currentTask ) {
+            return;
+        }
+        m_progress->update( p_current, wxString::Format( wxT( "Loading entries: %u/%u" ), p_current, p_total ) );
+    }
+
+    //============================================================================/
+
+    void BrowserWindow::onTreeBackgroundLoadEnd( CategoryTree& p_tree ) {
+        if ( m_currentTask ) {
+            return;
+        }
+        m_progress->SetStatusText( wxEmptyString );
+        m_progress->hideProgressBar( );
+    }
+
+    //============================================================================/
+
     void BrowserWindow::onTreeExtractFile( CategoryTree& p_tree, bool p_mode ) {
         auto entries = p_tree.getSelectedEntries( );
         Exporter *exporter;

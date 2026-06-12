@@ -89,6 +89,8 @@ namespace gw2b {
     //============================================================================/
 
     CategoryTree::~CategoryTree( ) {
+        this->cancelBackgroundFill( );
+
         if ( m_index ) {
             m_index->removeListener( this );
         }
@@ -318,6 +320,10 @@ namespace gw2b {
     //============================================================================/
 
     void CategoryTree::clearEntries( ) {
+        // Stop any background fill: its category pointers belong to data that is
+        // about to be deleted.
+        this->cancelBackgroundFill( );
+
         this->DeleteAllItems( );
         this->AddRoot( wxT( "Root" ) );
 
@@ -416,23 +422,149 @@ namespace gw2b {
             }
         }
 
-        auto existing = this->findChildEntry( categoryItem, p_entry );
-        if ( existing.IsOk( ) ) {
-            if ( !this->IsExpanded( categoryItem ) ) {
+        wxTreeItemId entryItem = this->findChildEntry( categoryItem, p_entry );
+
+        if ( !entryItem.IsOk( ) ) {
+            if ( this->IsExpanded( categoryItem ) ) {
+                // Already expanded (e.g. a previous background fill is still
+                // running) but our target isn't inserted yet. Insert it directly
+                // so the find is instant.
+                entryItem = this->addEntry( categoryItem, p_entry );
+                this->SetItemData( entryItem, new CategoryTreeItem( CategoryTreeItem::DT_Entry, &p_entry ) );
+            } else {
+                // Expanding a dirty leaf category would populate every sibling
+                // entry synchronously and freeze the UI. Insert only the target
+                // entry via selective expand instead.
                 m_selectiveExpandEntry = &p_entry;
                 this->Expand( categoryItem );
                 m_selectiveExpandEntry = nullptr;
+                entryItem = this->findChildEntry( categoryItem, p_entry );
             }
-            return existing;
+        } else if ( !this->IsExpanded( categoryItem ) ) {
+            m_selectiveExpandEntry = &p_entry;
+            this->Expand( categoryItem );
+            m_selectiveExpandEntry = nullptr;
         }
 
-        // Expanding a dirty leaf category would populate every sibling entry.
-        // Insert only the target entry and use selective expand instead.
-        m_selectiveExpandEntry = &p_entry;
-        this->Expand( categoryItem );
-        m_selectiveExpandEntry = nullptr;
+        // Load the rest of the siblings (and this category's subcategory folders)
+        // in the background so they appear without blocking. The dirty flag is
+        // cleared only after a full populate, so a clean category needs nothing.
+        auto categoryData = static_cast<const CategoryTreeItem*>( this->GetItemData( categoryItem ) );
+        const bool fullyPopulated = categoryData && !categoryData->isDirty( )
+            && this->countEntryChildren( categoryItem ) >= category->numEntries( );
+        if ( !fullyPopulated ) {
+            this->beginBackgroundFill( categoryItem, *category );
+        }
 
-        return this->findChildEntry( categoryItem, p_entry );
+        return entryItem;
+    }
+
+    //============================================================================/
+
+    void CategoryTree::beginBackgroundFill( const wxTreeItemId& p_item, const DatIndexCategory& p_category ) {
+        // Restart any previous fill; we only track one at a time.
+        this->cancelBackgroundFill( );
+
+        m_bgFillItem = p_item;
+        m_bgFillCategory = &p_category;
+        m_bgFillNext = 0;
+        m_bgFillPresent.clear( );
+
+        // Record entries already present so we never insert duplicates.
+        wxTreeItemIdValue cookie;
+        auto child = this->GetFirstChild( p_item, cookie );
+        while ( child.IsOk( ) ) {
+            auto data = static_cast<const CategoryTreeItem*>( this->GetItemData( child ) );
+            if ( data && data->dataType( ) == CategoryTreeItem::DT_Entry ) {
+                m_bgFillPresent.insert( data->data( ) );
+            }
+            child = this->GetNextChild( p_item, cookie );
+        }
+
+        m_bgFillActive = true;
+        this->Bind( wxEVT_IDLE, &CategoryTree::onIdleFill, this );
+
+        for ( auto const& it : m_listeners ) {
+            it->onTreeBackgroundLoadBegin( *this, p_category.numEntries( ) );
+        }
+    }
+
+    //============================================================================/
+
+    void CategoryTree::cancelBackgroundFill( ) {
+        if ( !m_bgFillActive ) {
+            return;
+        }
+        this->Unbind( wxEVT_IDLE, &CategoryTree::onIdleFill, this );
+        m_bgFillActive = false;
+        m_bgFillCategory = nullptr;
+        m_bgFillItem = wxTreeItemId( );
+        m_bgFillNext = 0;
+        m_bgFillPresent.clear( );
+
+        for ( auto const& it : m_listeners ) {
+            it->onTreeBackgroundLoadEnd( *this );
+        }
+    }
+
+    //============================================================================/
+
+    void CategoryTree::onIdleFill( wxIdleEvent& p_event ) {
+        if ( !m_bgFillActive || !m_bgFillCategory || !m_bgFillItem.IsOk( ) ) {
+            this->cancelBackgroundFill( );
+            return;
+        }
+
+        // Number of entries to add per idle tick. Small enough to keep the UI
+        // responsive, large enough to finish quickly.
+        const uint BATCH = 500;
+        auto category = m_bgFillCategory;
+        const uint total = category->numEntries( );
+
+        this->Freeze( );
+        uint added = 0;
+        while ( m_bgFillNext < total && added < BATCH ) {
+            auto entry = category->entry( m_bgFillNext++ );
+            if ( !entry ) {
+                continue;
+            }
+            if ( m_bgFillPresent.count( entry ) ) {
+                continue;
+            }
+            this->AppendItem( m_bgFillItem, entry->name( ), this->getImageForEntry( *entry ), -1,
+                new CategoryTreeItem( CategoryTreeItem::DT_Entry, entry ) );
+            m_bgFillPresent.insert( entry );
+            added++;
+        }
+        this->Thaw( );
+
+        for ( auto const& it : m_listeners ) {
+            it->onTreeBackgroundLoadUpdate( *this, m_bgFillNext, total );
+        }
+
+        if ( m_bgFillNext < total ) {
+            // Keep getting idle events until we're done.
+            p_event.RequestMore( );
+            return;
+        }
+
+        // Finished: sort entries and append subcategories, matching a normal
+        // expand. SortChildren preserves existing item ids (and the selection).
+        this->Freeze( );
+        this->SortChildren( m_bgFillItem );
+        for ( uint i = 0; i < category->numSubCategories( ); i++ ) {
+            auto subcategory = category->subCategory( i );
+            if ( subcategory ) {
+                this->ensureHasCategory( *subcategory, true );
+            }
+        }
+        auto itemData = static_cast<CategoryTreeItem*>( this->GetItemData( m_bgFillItem ) );
+        if ( itemData && itemData->dataType( ) == CategoryTreeItem::DT_Category ) {
+            itemData->setDirty( false );
+        }
+        this->Thaw( );
+
+        this->cancelBackgroundFill( );
     }
 
     //============================================================================/
@@ -651,21 +783,16 @@ namespace gw2b {
             return;
         }
 
-        // Selective expand: only insert the entry being searched for.
+        // Selective expand: only insert the entry being searched for. Remaining
+        // entries and subcategories are added later by the background fill, which
+        // preserves the normal "sorted entries, then folders" ordering.
         if ( m_selectiveExpandEntry && m_selectiveExpandEntry->category( ) == category ) {
             this->removeNonCategoryChildren( id );
 
             auto node = this->addEntry( id, *m_selectiveExpandEntry );
             this->SetItemData( node, new CategoryTreeItem( CategoryTreeItem::DT_Entry, m_selectiveExpandEntry ) );
 
-            for ( uint i = 0; i < category->numSubCategories( ); i++ ) {
-                auto subcategory = category->subCategory( i );
-                if ( subcategory ) {
-                    this->ensureHasCategory( *subcategory, true );
-                }
-            }
-
-            itemData->setDirty( false );
+            // Leave dirty: the category is only partially populated for now.
             return;
         }
 
@@ -677,6 +804,12 @@ namespace gw2b {
             } else {
                 return;
             }
+        }
+
+        // If a background fill is populating this same category, cancel it; we
+        // are about to repopulate it fully and would otherwise insert duplicates.
+        if ( m_bgFillActive && m_bgFillItem == id ) {
+            this->cancelBackgroundFill( );
         }
 
         // Remove stale file entries and wx placeholder nodes, keep subcategory folders
