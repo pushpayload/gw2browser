@@ -48,8 +48,9 @@
 
 namespace gw2b {
 
-    Exporter::Exporter( const Array<const DatIndexEntry*>& p_entries, DatFile& p_datFile, ExtractionMode p_mode )
+    Exporter::Exporter( wxWindow* p_owner, const Array<const DatIndexEntry*>& p_entries, DatFile& p_datFile, ExtractionMode p_mode )
         : m_datFile( p_datFile )
+        , m_owner( p_owner )
         , m_entries( p_entries )
         , m_progress( nullptr )
         , m_currentProgress( 0 )
@@ -70,7 +71,7 @@ namespace gw2b {
             m_datFile.identifyFileType( entryData.GetPointer( ), entryData.GetSize( ), m_fileType );
 
             // Ask for location
-            wxFileDialog dialog( this,
+            wxFileDialog dialog( m_owner,
                 wxString::Format( wxT( "Extract %s..." ), entry->name( ) ),
                 wxEmptyString,
                 wxString::Format( wxT( "%s" ), entry->name( ) ),
@@ -91,7 +92,7 @@ namespace gw2b {
         // More than one files
         } else {
             // Ask for location
-            wxDirDialog dialog( this, wxT( "Select output folder" ) );
+            wxDirDialog dialog( m_owner, wxT( "Select output folder" ) );
             if ( dialog.ShowModal( ) == wxID_OK ) {
 
                 m_path = dialog.GetPath( );
@@ -99,7 +100,7 @@ namespace gw2b {
                 uint numFile = static_cast<uint>( p_entries.GetSize( ) );
 
                 auto title = wxString::Format( wxT( "Extracting %d %s..." ), numFile, ( p_entries.GetSize( ) == 1 ? wxT( "file" ) : wxT( "files" ) ) );
-                m_progress = new wxProgressDialog( title, wxT( "Preparing to extract..." ), p_entries.GetSize( ), this, wxPD_SMOOTH | wxPD_CAN_ABORT | wxPD_ELAPSED_TIME );
+                m_progress = new wxProgressDialog( title, wxT( "Preparing to extract..." ), p_entries.GetSize( ), m_owner, wxPD_SMOOTH | wxPD_CAN_ABORT | wxPD_ELAPSED_TIME );
                 m_progress->Show( );
 
                 // Loop through each files and update progress bar

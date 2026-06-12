@@ -752,9 +752,9 @@ namespace gw2b {
 
         if ( entries.GetSize( ) ) {
             if ( p_mode ) {
-                exporter = new Exporter( entries, m_datFile, Exporter::EM_Converted );
+                exporter = new Exporter( this, entries, m_datFile, Exporter::EM_Converted );
             } else {
-                exporter = new Exporter( entries, m_datFile, Exporter::EM_Raw );
+                exporter = new Exporter( this, entries, m_datFile, Exporter::EM_Raw );
             }
             delete exporter;
         }

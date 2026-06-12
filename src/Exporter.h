@@ -51,6 +51,7 @@ namespace gw2b {
 
     private:
         DatFile&                    m_datFile;
+        wxWindow*                   m_owner;
         Array<const DatIndexEntry*> m_entries;
         wxProgressDialog*           m_progress;
         uint                        m_currentProgress;
@@ -61,11 +62,11 @@ namespace gw2b {
 
     public:
         /** Constructor.
+        *  \param[in]  p_owner         Window to parent the export dialogs to.
         *  \param[in]  p_entries       Entry to extract.
         *  \param[in]  p_datFile       .dat file containing the file.
-        *  \param[in]  p_mode          File extract mode.
-        *  \param[in]  p_filename      File name to save to.*/
-        Exporter( const Array<const DatIndexEntry*>& p_entries, DatFile& p_datFile, ExtractionMode p_mode );
+        *  \param[in]  p_mode          File extract mode.*/
+        Exporter( wxWindow* p_owner, const Array<const DatIndexEntry*>& p_entries, DatFile& p_datFile, ExtractionMode p_mode );
 
     private:
         /** Gets an appropriate file extension for the contents.
