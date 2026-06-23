@@ -21,6 +21,7 @@
   <ItemGroup>
     <ClInclude Include="..\src\ANetStructs.h" />
     <ClInclude Include="..\src\CategoryTree.h" />
+    <ClInclude Include="..\src\AsyncFileLoader.h" />
     <ClInclude Include="..\src\BrowserWindow.h" />
     <ClInclude Include="..\src\Data.h" />
     <ClInclude Include="..\src\DatIndexIO.h" />
@@ -32,6 +33,7 @@
     <ClInclude Include="..\src\DatFile.h" />
     <ClInclude Include="..\src\DatIndex.h" />
     <ClInclude Include="..\src\Gw2Browser.h" />
+    <ClInclude Include="..\src\IndexCompareDialog.h" />
     <ClInclude Include="..\src\Identifiers\BaseIdentifier.h" />
     <ClInclude Include="..\src\Imported\crc.h" />
     <ClInclude Include="..\src\Imported\half.h" />
@@ -86,6 +88,7 @@
     <ClInclude Include="..\src\wx_pch.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\src\AsyncFileLoader.cpp" />
     <ClCompile Include="..\src\BrowserWindow.cpp" />
     <ClCompile Include="..\src\CategoryTree.cpp" />
     <ClCompile Include="..\src\Data.cpp" />
@@ -96,6 +99,7 @@
     <ClCompile Include="..\src\DatFile.cpp" />
     <ClCompile Include="..\src\DatIndex.cpp" />
     <ClCompile Include="..\src\Gw2Browser.cpp" />
+    <ClCompile Include="..\src\IndexCompareDialog.cpp" />
     <ClCompile Include="..\src\Imported\crc.cpp" />
     <ClCompile Include="..\src\Imported\half.cpp" />
     <ClCompile Include="..\src\PackFile.cpp" />

@@ -35,6 +35,7 @@
 
 #include "EventId.h"
 #include "CategoryTree.h"
+#include "AsyncFileLoader.h"
 #include "Exporter.h"
 #include "FileReader.h"
 #include "ProgressStatusBar.h"
@@ -46,11 +47,7 @@
 #include "Tasks/WriteIndexTask.h"
 
 #include "DatIndexIO.h"
-
-#include <wx/clipbrd.h>
-#include <wx/listctrl.h>
-#include <wx/menu.h>
-#include <wx/textfile.h>
+#include "IndexCompareDialog.h"
 
 #include <algorithm>
 #include <chrono>
@@ -96,8 +93,6 @@ namespace gw2b {
         }
 
     } // namespace
-
-    wxDEFINE_EVENT( EVT_FILE_LOADED, wxThreadEvent );
 
     BrowserWindow::BrowserWindow( const wxString& p_title, const wxSize p_size )
         : wxFrame( nullptr, wxID_ANY, p_title, wxDefaultPosition, p_size )
@@ -413,119 +408,6 @@ namespace gw2b {
 
     //============================================================================/
 
-    AsyncFileLoader::AsyncFileLoader( DatFile& p_datFile, wxEvtHandler* p_sink )
-        : m_datFile( p_datFile )
-        , m_sink( p_sink ) {
-        m_thread = std::thread( &AsyncFileLoader::workerMain, this );
-    }
-
-    //============================================================================/
-
-    AsyncFileLoader::~AsyncFileLoader( ) {
-        {
-            std::lock_guard<std::mutex> lock( m_mutex );
-            m_stop = true;
-            m_hasRequest = false;
-        }
-        m_cv.notify_all( );
-        if ( m_thread.joinable( ) ) {
-            m_thread.join( );
-        }
-    }
-
-    //============================================================================/
-
-    uint AsyncFileLoader::request( uint p_fileNum, ANetFileType p_fileType, const wxString& p_name ) {
-        uint generation = ++m_generation;
-        {
-            std::lock_guard<std::mutex> lock( m_mutex );
-            m_reqFileNum = p_fileNum;
-            m_reqFileType = p_fileType;
-            // Force a deep copy so the worker never shares a string buffer with
-            // the UI thread.
-            m_reqName = wxString( p_name.c_str( ) );
-            m_reqGeneration = generation;
-            m_hasRequest = true;
-        }
-        m_cv.notify_one( );
-        return generation;
-    }
-
-    //============================================================================/
-
-    void AsyncFileLoader::cancelAndWait( ) {
-        std::unique_lock<std::mutex> lock( m_mutex );
-        m_hasRequest = false;
-        // Bump the generation so any in-flight result is discarded by the sink.
-        ++m_generation;
-        m_idleCv.wait( lock, [this] { return !m_busy; } );
-    }
-
-    //============================================================================/
-
-    void AsyncFileLoader::workerMain( ) {
-        for ( ;; ) {
-            uint fileNum;
-            ANetFileType fileType;
-            wxString name;
-            uint generation;
-
-            {
-                std::unique_lock<std::mutex> lock( m_mutex );
-                m_cv.wait( lock, [this] { return m_hasRequest || m_stop; } );
-                if ( m_stop ) {
-                    return;
-                }
-                fileNum = m_reqFileNum;
-                fileType = m_reqFileType;
-                name = wxString( m_reqName.c_str( ) );
-                generation = m_reqGeneration;
-                m_hasRequest = false;
-                m_busy = true;
-            }
-
-            // (Re)open the per-thread read context if the .dat changed.
-            if ( !m_contextReady || m_contextPath != m_datFile.path( ) ) {
-                m_contextReady = m_context.open( m_datFile );
-                m_contextPath = wxString( m_datFile.path( ).c_str( ) );
-            }
-
-            auto result = std::make_shared<FileLoadResult>( );
-            result->generation = generation;
-            result->fileNum = fileNum;
-            result->fileType = fileType;
-            result->name = name;
-            result->success = false;
-
-            if ( m_contextReady ) {
-                uint size = m_datFile.fileSize( fileNum, m_context );
-                if ( size > 0 && size != UINT_MAX ) {
-                    result->data.resize( size );
-                    uint read = m_datFile.readFile( fileNum, result->data.data( ), m_context );
-                    if ( read > 0 ) {
-                        result->data.resize( read );
-                        result->success = true;
-                    } else {
-                        result->data.clear( );
-                    }
-                }
-            }
-
-            // Hand the result back to the UI thread.
-            auto evt = new wxThreadEvent( EVT_FILE_LOADED );
-            evt->SetPayload( result );
-            m_sink->QueueEvent( evt );
-
-            {
-                std::lock_guard<std::mutex> lock( m_mutex );
-                m_busy = false;
-            }
-            m_idleCv.notify_all( );
-        }
-    }
-
-    //============================================================================/
-
     bool BrowserWindow::OGLAvailable( ) {
         //Test if visual attributes were accepted.
         if ( !m_previewGLCanvas ) {
@@ -776,81 +658,6 @@ namespace gw2b {
 
     //============================================================================/
 
-    namespace {
-
-        /** Classification of a single file when diffing two indexes. */
-        enum DiffStatus {
-            DS_Added,       /**< Present in the current index, absent in the other. */
-            DS_Changed,     /**< Present in both, but the .dat content moved (different MFT entry). */
-            DS_Removed,     /**< Present in the other index, absent in the current. */
-        };
-
-        /** A single row of the comparison result. */
-        struct DiffRow {
-            DiffStatus  status;
-            uint        baseId;
-            uint        fileId;
-            uint        mftOld;
-            uint        mftNew;
-            wxString    name;
-            wxString    category;
-        };
-
-        /** Builds a stable identity key for an entry, preferring base id, then
-        *  file id, then MFT entry for id-less files. */
-        uint64 entryKey( const DatIndexEntry* p_entry ) {
-            if ( p_entry->baseId( ) ) {
-                return static_cast<uint64>( p_entry->baseId( ) );
-            }
-            if ( p_entry->fileId( ) ) {
-                return ( static_cast<uint64>( 1 ) << 40 ) | p_entry->fileId( );
-            }
-            return ( static_cast<uint64>( 1 ) << 41 ) | p_entry->mftEntry( );
-        }
-
-        /** Builds a "Parent/Child/..." path string for a category. */
-        wxString categoryPath( const DatIndexCategory* p_category ) {
-            wxString path;
-            for ( auto category = p_category; category != nullptr; category = category->parent( ) ) {
-                if ( path.IsEmpty( ) ) {
-                    path = category->name( );
-                } else {
-                    path = category->name( ) + wxT( "/" ) + path;
-                }
-            }
-            return path;
-        }
-
-        void copyTextToClipboard( const wxString& p_text ) {
-            if ( !wxTheClipboard->Open( ) ) {
-                return;
-            }
-            wxTheClipboard->SetData( new wxTextDataObject( p_text ) );
-            wxTheClipboard->Close( );
-        }
-
-        wxString formatDiffRowFileId( const DiffRow& p_row ) {
-            if ( p_row.fileId ) {
-                return wxString::Format( wxT( "%u" ), p_row.fileId );
-            }
-            if ( p_row.baseId ) {
-                return wxString::Format( wxT( "%u" ), p_row.baseId );
-            }
-            return p_row.name;
-        }
-
-        wxString formatDiffRowForClipboard( const DiffRow& p_row ) {
-            wxString statusStr = ( p_row.status == DS_Added ) ? wxT( "Added" )
-                : ( p_row.status == DS_Removed ) ? wxT( "Removed" ) : wxT( "Changed" );
-            wxString mft = ( p_row.status == DS_Added ) ? wxString::Format( wxT( "%u" ), p_row.mftNew )
-                : ( p_row.status == DS_Removed ) ? wxString::Format( wxT( "%u" ), p_row.mftOld )
-                : wxString::Format( wxT( "%u > %u" ), p_row.mftOld, p_row.mftNew );
-            return wxString::Format( wxT( "%s\t%s\t%s\t%s\t%s" ),
-                statusStr, p_row.name, formatDiffRowFileId( p_row ), mft, p_row.category );
-        }
-
-    } // namespace
-
     void BrowserWindow::onCompareIndexEvt( wxCommandEvent& WXUNUSED( p_event ) ) {
         // The index must be fully loaded and stable to compare against.
         if ( m_currentTask ) {
@@ -906,7 +713,7 @@ namespace gw2b {
         for ( uint i = 0; i < otherIndex->numEntries( ); i++ ) {
             auto entry = otherIndex->entry( i );
             if ( entry ) {
-                oldMap[entryKey( entry )] = entry;
+                oldMap[diffEntryKey( entry )] = entry;
             }
         }
 
@@ -920,18 +727,18 @@ namespace gw2b {
             if ( !entry ) {
                 continue;
             }
-            auto key = entryKey( entry );
+            auto key = diffEntryKey( entry );
             seen.insert( key );
 
             auto it = oldMap.find( key );
             if ( it == oldMap.end( ) ) {
                 rows.push_back( { DS_Added, entry->baseId( ), entry->fileId( ), 0, entry->mftEntry( ),
-                    entry->name( ), categoryPath( entry->category( ) ) } );
+                    entry->name( ), diffCategoryPath( entry->category( ) ) } );
                 added++;
             } else if ( it->second->mftEntry( ) != entry->mftEntry( ) ) {
                 rows.push_back( { DS_Changed, entry->baseId( ), entry->fileId( ),
                     it->second->mftEntry( ), entry->mftEntry( ),
-                    entry->name( ), categoryPath( entry->category( ) ) } );
+                    entry->name( ), diffCategoryPath( entry->category( ) ) } );
                 changed++;
             }
         }
@@ -942,7 +749,7 @@ namespace gw2b {
             }
             auto entry = kv.second;
             rows.push_back( { DS_Removed, entry->baseId( ), entry->fileId( ), entry->mftEntry( ), 0,
-                entry->name( ), categoryPath( entry->category( ) ) } );
+                entry->name( ), diffCategoryPath( entry->category( ) ) } );
             removed++;
         }
 
@@ -955,148 +762,24 @@ namespace gw2b {
         } );
 
         auto sharedRows = std::make_shared<std::vector<DiffRow>>( std::move( rows ) );
+        auto summary = wxString::Format(
+            wxT( "%u added, %u removed, %u changed   (current index: %u entries, other index: %u entries)" ),
+            added, removed, changed, m_index->numEntries( ), otherIndex->numEntries( ) );
 
         if ( m_compareDialog ) {
             m_compareDialog->Destroy( );
             m_compareDialog = nullptr;
         }
 
-        auto dlg = new wxDialog( this, wxID_ANY, wxT( "Index Comparison" ), wxDefaultPosition,
-            wxSize( 760, 540 ), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER );
-        m_compareDialog = dlg;
-        auto sizer = new wxBoxSizer( wxVERTICAL );
-
-        auto summary = wxString::Format(
-            wxT( "%u added, %u removed, %u changed   (current index: %u entries, other index: %u entries)" ),
-            added, removed, changed, m_index->numEntries( ), otherIndex->numEntries( ) );
-        sizer->Add( new wxStaticText( dlg, wxID_ANY, summary ), wxSizerFlags( ).Border( wxALL, 8 ) );
-        sizer->Add( new wxStaticText( dlg, wxID_ANY,
-            wxT( "Double-click Added or Changed rows to jump to the file. Right-click to copy." ) ),
-            wxSizerFlags( ).Border( wxLEFT | wxRIGHT | wxBOTTOM, 8 ) );
-
-        auto list = new wxListCtrl( dlg, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-            wxLC_REPORT | wxLC_SINGLE_SEL | wxLC_HRULES );
-        list->AppendColumn( wxT( "Status" ), wxLIST_FORMAT_LEFT, 75 );
-        list->AppendColumn( wxT( "Name" ), wxLIST_FORMAT_LEFT, 130 );
-        list->AppendColumn( wxT( "File ID" ), wxLIST_FORMAT_LEFT, 80 );
-        list->AppendColumn( wxT( "MFT (old > new)" ), wxLIST_FORMAT_LEFT, 130 );
-        list->AppendColumn( wxT( "Category" ), wxLIST_FORMAT_LEFT, 300 );
-
-        // Cap how many rows we render to keep the control responsive; the full
-        // set is always available via the CSV export.
         const size_t displayCap = 20000;
-        size_t displayCount = std::min( sharedRows->size( ), displayCap );
-
-        list->Freeze( );
-        for ( size_t i = 0; i < displayCount; i++ ) {
-            auto const& row = ( *sharedRows )[i];
-            wxString statusStr = ( row.status == DS_Added ) ? wxT( "Added" )
-                : ( row.status == DS_Removed ) ? wxT( "Removed" ) : wxT( "Changed" );
-            long idx = list->InsertItem( static_cast<long>( i ), statusStr );
-            list->SetItem( idx, 1, row.name );
-            list->SetItem( idx, 2, formatDiffRowFileId( row ) );
-            wxString mft = ( row.status == DS_Added ) ? wxString::Format( wxT( "%u" ), row.mftNew )
-                : ( row.status == DS_Removed ) ? wxString::Format( wxT( "%u" ), row.mftOld )
-                : wxString::Format( wxT( "%u > %u" ), row.mftOld, row.mftNew );
-            list->SetItem( idx, 3, mft );
-            list->SetItem( idx, 4, row.category );
-            list->SetItemData( idx, static_cast<long>( i ) );
-            wxColour colour = ( row.status == DS_Added ) ? wxColour( 0, 128, 0 )
-                : ( row.status == DS_Removed ) ? wxColour( 176, 0, 0 ) : wxColour( 180, 120, 0 );
-            list->SetItemTextColour( idx, colour );
-        }
-        list->Thaw( );
-        sizer->Add( list, wxSizerFlags( 1 ).Expand( ).Border( wxLEFT | wxRIGHT, 8 ) );
-
-        if ( sharedRows->size( ) > displayCap ) {
-            auto note = wxString::Format(
-                wxT( "Showing the first %u of %u differences. Use \"Save to CSV...\" to export them all." ),
-                static_cast<uint>( displayCap ), static_cast<uint>( sharedRows->size( ) ) );
-            sizer->Add( new wxStaticText( dlg, wxID_ANY, note ), wxSizerFlags( ).Border( wxALL, 8 ) );
-        }
-
-        auto btnSizer = new wxBoxSizer( wxHORIZONTAL );
-        btnSizer->Add( new wxButton( dlg, wxID_SAVE, wxT( "Save to CSV..." ) ), wxSizerFlags( ).Border( wxALL, 8 ) );
-        btnSizer->AddStretchSpacer( );
-        btnSizer->Add( new wxButton( dlg, wxID_CLOSE, wxT( "Close" ) ), wxSizerFlags( ).Border( wxALL, 8 ) );
-        sizer->Add( btnSizer, wxSizerFlags( ).Expand( ) );
-
-        dlg->SetSizer( sizer );
-
-        auto getRowAt = [sharedRows, list] ( long p_listIndex ) -> const DiffRow* {
-            if ( p_listIndex < 0 ) {
-                return nullptr;
-            }
-            auto rowIndex = list->GetItemData( p_listIndex );
-            if ( rowIndex < 0 || static_cast<size_t>( rowIndex ) >= sharedRows->size( ) ) {
-                return nullptr;
-            }
-            return &( *sharedRows )[static_cast<size_t>( rowIndex )];
-        };
-
-        list->Bind( wxEVT_LIST_ITEM_ACTIVATED, [this, getRowAt] ( wxListEvent& p_event ) {
-            auto const* row = getRowAt( p_event.GetIndex( ) );
-            if ( !row || ( row->status != DS_Added && row->status != DS_Changed ) ) {
-                return;
-            }
-            this->navigateToDiffEntry( row->baseId, row->fileId );
-        } );
-
-        list->Bind( wxEVT_LIST_ITEM_RIGHT_CLICK, [getRowAt, list] ( wxListEvent& p_event ) {
-            auto const* row = getRowAt( p_event.GetIndex( ) );
-            if ( !row ) {
-                return;
-            }
-
-            wxMenu menu;
-            auto copyFileId = menu.Append( wxID_ANY, wxT( "Copy File ID" ) );
-            auto copyRow = menu.Append( wxID_ANY, wxT( "Copy Row" ) );
-
-            menu.Bind( wxEVT_MENU, [row] ( wxCommandEvent& ) {
-                copyTextToClipboard( formatDiffRowFileId( *row ) );
-            }, copyFileId->GetId( ) );
-            menu.Bind( wxEVT_MENU, [row] ( wxCommandEvent& ) {
-                copyTextToClipboard( formatDiffRowForClipboard( *row ) );
-            }, copyRow->GetId( ) );
-
-            list->PopupMenu( &menu, p_event.GetPoint( ) );
-        } );
-
-        dlg->Bind( wxEVT_BUTTON, [dlg, sharedRows] ( wxCommandEvent& ) {
-            wxFileDialog save( dlg, wxT( "Save comparison" ), wxEmptyString, wxT( "index-diff.csv" ),
-                wxT( "CSV file (*.csv)|*.csv|All files (*.*)|*.*" ), wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
-            if ( save.ShowModal( ) != wxID_OK ) {
-                return;
-            }
-            wxTextFile file( save.GetPath( ) );
-            if ( file.Exists( ) ) {
-                file.Open( );
-            } else {
-                file.Create( );
-            }
-            file.Clear( );
-            file.AddLine( wxT( "Status,Name,FileId,BaseId,MftOld,MftNew,Category" ) );
-            for ( auto const& row : *sharedRows ) {
-                wxString statusStr = ( row.status == DS_Added ) ? wxT( "Added" )
-                    : ( row.status == DS_Removed ) ? wxT( "Removed" ) : wxT( "Changed" );
-                file.AddLine( wxString::Format( wxT( "%s,%s,%u,%u,%u,%u,\"%s\"" ),
-                    statusStr, row.name, row.fileId, row.baseId, row.mftOld, row.mftNew, row.category ) );
-            }
-            file.Write( );
-            file.Close( );
-        }, wxID_SAVE );
-
-        dlg->Bind( wxEVT_BUTTON, [dlg] ( wxCommandEvent& ) {
-            dlg->Destroy( );
-        }, wxID_CLOSE );
-
-        dlg->Bind( wxEVT_CLOSE_WINDOW, [this, dlg] ( wxCloseEvent& ) {
-            if ( m_compareDialog == dlg ) {
+        auto dlg = new IndexCompareDialog( this, m_datFile, m_index, sharedRows, summary, displayCap,
+            [this] ( uint baseId, uint fileId ) { this->navigateToDiffEntry( baseId, fileId ); } );
+        m_compareDialog = dlg;
+        dlg->Bind( wxEVT_DESTROY, [this] ( wxWindowDestroyEvent& p_event ) {
+            if ( m_compareDialog == p_event.GetEventObject( ) ) {
                 m_compareDialog = nullptr;
             }
-            dlg->Destroy( );
         } );
-
         dlg->Show( );
     }
 

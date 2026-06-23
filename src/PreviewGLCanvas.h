@@ -87,6 +87,8 @@ namespace gw2b {
         void clear( );
         /** Initialize the GLCanvas. */
         bool initGL( );
+        /** Ensures OpenGL and the renderer are ready (e.g. after the canvas is first shown). */
+        bool ensureGlReady( );
         /** Used just to know if we must end the program now because OpenGL 3.3 is not available. */
         bool glCtxAvailable( ) { return m_glContext != NULL; }
 

@@ -153,11 +153,19 @@ namespace gw2b {
 
 
             } if ( isOfType<ModelReader>( m_reader ) ) {
+                if ( !this->ensureGlReady( ) ) {
+                    return false;
+                }
+
                 // Load model
                 auto reader = this->modelReader( );
                 auto model = reader->getModel( );
 
                 m_glRenderer->loadModel( p_datFile, model );
+            }
+
+            if ( !m_glRenderer ) {
+                return false;
             }
 
             // Re-focus and re-render
@@ -225,6 +233,29 @@ namespace gw2b {
             return false;
         }
 
+        return true;
+    }
+
+    bool PreviewGLCanvas::ensureGlReady( ) {
+        if ( m_glRenderer ) {
+            return true;
+        }
+
+        if ( !m_glContext || !this->IsShownOnScreen( ) ) {
+            return false;
+        }
+
+        const wxSize clientSize = this->GetClientSize( );
+        if ( clientSize.y < 1 ) {
+            return false;
+        }
+
+        if ( !this->initGL( ) ) {
+            return false;
+        }
+
+        m_winHeight = clientSize.y;
+        m_glRenderer->setViewport( 0, 0, clientSize );
         return true;
     }
 
