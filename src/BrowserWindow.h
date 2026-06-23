@@ -133,6 +133,7 @@ namespace gw2b {
         wxTextCtrl*                 m_log;
         wxLog*                      m_logTarget;
         wxTextCtrl*                 m_findTextBox;
+        wxDialog*                   m_compareDialog;
         AsyncFileLoader             m_fileLoader;
 
     public:
@@ -259,6 +260,8 @@ namespace gw2b {
         void SetDefaults( );
         /** Call when "Go" button on find file panel is pressed. */
         void onFindFile( );
+        /** Reveals an entry in the category tree by base id or file id. */
+        void navigateToDiffEntry( uint p_baseId, uint p_fileId );
 
     }; // class BrowserWindow
 

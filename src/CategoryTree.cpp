@@ -394,6 +394,23 @@ namespace gw2b {
 
     //============================================================================/
 
+    wxTreeItemId CategoryTree::navigateToEntry( const DatIndexEntry& p_entry ) {
+        this->Freeze( );
+        auto item = this->revealEntry( p_entry );
+        this->Thaw( );
+
+        if ( !item.IsOk( ) ) {
+            return item;
+        }
+
+        this->UnselectAll( );
+        this->SelectItem( item );
+        this->ScrollTo( item );
+        return item;
+    }
+
+    //============================================================================/
+
     wxTreeItemId CategoryTree::revealEntry( const DatIndexEntry& p_entry ) {
         auto category = p_entry.category( );
         if ( !category ) {

@@ -202,6 +202,10 @@ namespace gw2b {
         *  \param[in]  p_string     Entry name to search for.
         *  \return wxTreeItemId  the matching tree item, or an invalid id if not found. */
         wxTreeItemId findEntry( const wxString& p_string );
+        /** Expands the category path to the entry, selects it, and scrolls it into view.
+        *  \param[in]  p_entry  Entry to reveal in the tree.
+        *  \return wxTreeItemId  the matching tree item, or an invalid id if not found. */
+        wxTreeItemId navigateToEntry( const DatIndexEntry& p_entry );
 
         /** Gets the .dat file index represented by this tree. */
         std::shared_ptr<DatIndex> datIndex( ) const;
