@@ -43,6 +43,8 @@ namespace gw2b {
         std::atomic<bool>           m_errorOccured;
         uint64                      m_datTimestamp;
         uint64                      m_datFingerprint;
+        uint64                      m_datFileSize;
+        uint32                      m_datPathCrc;
         bool                        m_batchUpdateActive;
         bool                        m_workerStarted;
         std::thread                 m_worker;
@@ -50,7 +52,8 @@ namespace gw2b {
         std::atomic<bool>           m_workerDone;
         std::atomic<bool>           m_abortRequested;
     public:
-        ReadIndexTask( const std::shared_ptr<DatIndex>& p_index, const wxString& p_filename, uint64 p_datTimestamp, uint64 p_datFingerprint = 0 );
+        ReadIndexTask( const std::shared_ptr<DatIndex>& p_index, const wxString& p_filename,
+            uint64 p_datTimestamp, uint64 p_datFingerprint, uint64 p_datFileSize, uint32 p_datPathCrc );
         virtual ~ReadIndexTask( );
 
         virtual bool init( ) override;

@@ -121,6 +121,9 @@ namespace gw2b {
     DatIndex::DatIndex( )
         : m_datTimestamp( 0 )
         , m_datFingerprint( 0 )
+        , m_datPathCrc( 0 )
+        , m_datFileSize( 0 )
+        , m_indexedAt( 0 )
         , m_highestMftEntry( -1 )
         , m_isDirty( false )
         , m_numEntries( 0 )
@@ -152,6 +155,9 @@ namespace gw2b {
         m_entriesByBaseId.clear( );
         m_datTimestamp = 0;
         m_datFingerprint = 0;
+        m_datPathCrc = 0;
+        m_datFileSize = 0;
+        m_indexedAt = 0;
         m_highestMftEntry = -1;
         m_isDirty = false;
         m_numEntries = 0;

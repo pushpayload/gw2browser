@@ -120,6 +120,8 @@ namespace gw2b {
     /** Represents the browser's main window. */
     class BrowserWindow : public wxFrame, public ICategoryTreeListener {
         wxString                    m_datPath;
+        uint32                      m_datPathCrc;
+        wxString                    m_activeIndexPath;
         DatFile                     m_datFile;
         std::shared_ptr<DatIndex>   m_index;
         ProgressStatusBar*          m_progress;
@@ -158,10 +160,16 @@ namespace gw2b {
         *  \return bool    true if the task's init succeeded, false if not. */
         bool performTask( Task* p_task );
 
-        /** Hashes the internally stored .dat file path and determines where its
-        *   index file should be located.
-        *   \return wxFileName containing the path to the index file. */
-        wxFileName findDatIndex( );
+        /** Returns the directory where .dat index files are stored. */
+        wxFileName indexStorageDir( ) const;
+        /** Collects index file paths associated with the current .dat path. */
+        wxArrayString collectIndexCandidates( ) const;
+        /** Finds an on-disk index whose header matches the currently open .dat. */
+        wxString findMatchingIndex( uint64 p_datTimestamp, uint64 p_datFingerprint, uint64 p_datFileSize ) const;
+        /** Allocates a new index path using {pathCrc}_{indexedAt}.idx. */
+        wxString allocateNewIndexPath( ) const;
+        /** Stamps the current .dat metadata into the in-memory index. */
+        void stampIndexMetadata( );
         /** Resumes indexing the loaded .dat file. */
         void indexDat( );
         /** Re-indexes the loaded .dat file. */

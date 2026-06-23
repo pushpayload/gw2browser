@@ -26,6 +26,7 @@
 #include "stdafx.h"
 
 #include <wx/aui/aui.h>
+#include <wx/dir.h>
 #include <wx/filedlg.h>
 #include <wx/filename.h>
 #include <wx/stdpaths.h>
@@ -50,6 +51,7 @@
 #include <wx/textfile.h>
 
 #include <algorithm>
+#include <chrono>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -57,6 +59,40 @@
 #include "BrowserWindow.h"
 
 namespace gw2b {
+
+    namespace {
+
+        uint32 computeDatPathCrc( const wxString& p_datPath ) {
+            return ::compute_crc( INITIAL_CRC, p_datPath.char_str( ), p_datPath.Length( ) );
+        }
+
+        uint64 currentTimeMillis( ) {
+            using namespace std::chrono;
+            return static_cast<uint64>( duration_cast<milliseconds>( system_clock::now( ).time_since_epoch( ) ).count( ) );
+        }
+
+        uint64 indexedAtFromFilename( const wxString& p_indexPath ) {
+            wxFileName fileName( p_indexPath );
+            auto name = fileName.GetName( );
+            auto separator = name.Find( wxT( '_' ) );
+            if ( separator == wxNOT_FOUND ) {
+                return 0;
+            }
+
+            unsigned long long value = 0;
+            if ( name.Mid( separator + 1 ).ToULongLong( &value ) ) {
+                return value;
+            }
+            return 0;
+        }
+
+        void ensureDirectoryExists( const wxFileName& p_directory ) {
+            if ( !p_directory.DirExists( ) ) {
+                p_directory.Mkdir( 511, wxPATH_MKDIR_FULL );
+            }
+        }
+
+    } // namespace
 
     wxDEFINE_EVENT( EVT_FILE_LOADED, wxThreadEvent );
 
@@ -275,16 +311,24 @@ namespace gw2b {
         }
         wxLogMessage( wxT( "Open dat file: %s" ), p_path );
         m_datPath = p_path;
+        m_datPathCrc = computeDatPathCrc( p_path );
 
-        // Open the index file
         uint64 datTimeStamp = wxFileModificationTime( p_path );
         uint64 datFingerprint = m_datFile.fingerprint( );
-        auto indexFile = this->findDatIndex( );
-        auto readIndexTask = new ReadIndexTask( m_index, indexFile.GetFullPath( ), datTimeStamp, datFingerprint );
+        uint64 datFileSize = static_cast<uint64>( wxFileName( p_path ).GetSize( ).GetValue( ) );
 
-        // Start reading the index
-        readIndexTask->addOnCompleteHandler( [this] ( ) { this->onReadIndexComplete( ); } );
-        if ( !this->performTask( readIndexTask ) ) {
+        ensureDirectoryExists( this->indexStorageDir( ) );
+        m_activeIndexPath = this->findMatchingIndex( datTimeStamp, datFingerprint, datFileSize );
+
+        if ( !m_activeIndexPath.IsEmpty( ) ) {
+            auto readIndexTask = new ReadIndexTask( m_index, m_activeIndexPath, datTimeStamp, datFingerprint, datFileSize, m_datPathCrc );
+            readIndexTask->addOnCompleteHandler( [this] ( ) { this->onReadIndexComplete( ); } );
+            if ( !this->performTask( readIndexTask ) ) {
+                m_activeIndexPath = this->allocateNewIndexPath( );
+                this->reIndexDat( );
+            }
+        } else {
+            m_activeIndexPath = this->allocateNewIndexPath( );
             this->reIndexDat( );
         }
 
@@ -486,22 +530,95 @@ namespace gw2b {
 
     //============================================================================/
 
-    wxFileName BrowserWindow::findDatIndex( ) {
+    wxFileName BrowserWindow::indexStorageDir( ) const {
         wxStandardPathsBase& stdp = wxStandardPaths::Get( );
-        auto configPath = stdp.GetUserDataDir( );
+        return wxFileName( stdp.GetUserDataDir( ), wxEmptyString );
+    }
 
-        auto datPathCrc = ::compute_crc( INITIAL_CRC, m_datPath.char_str( ), m_datPath.Length( ) );
-        auto indexFileName = wxString::Format( wxT( "%x.idx" ), datPathCrc );
+    //============================================================================/
 
-        return wxFileName( configPath, indexFileName );
+    wxArrayString BrowserWindow::collectIndexCandidates( ) const {
+        wxArrayString candidates;
+        auto storageDir = this->indexStorageDir( );
+        if ( !storageDir.DirExists( ) ) {
+            return candidates;
+        }
+
+        wxArrayString allIndexFiles;
+        wxDir::GetAllFiles( storageDir.GetPath( ), &allIndexFiles, wxT( "*.idx" ), wxDIR_FILES );
+
+        auto prefix = wxString::Format( wxT( "%x" ), m_datPathCrc );
+        auto prefixWithSeparator = prefix + wxT( "_" );
+        for ( const auto& file : allIndexFiles ) {
+            wxFileName fileName( file );
+            auto name = fileName.GetName( );
+            if ( name == prefix || name.StartsWith( prefixWithSeparator ) ) {
+                candidates.Add( file );
+            }
+        }
+
+        return candidates;
+    }
+
+    //============================================================================/
+
+    wxString BrowserWindow::findMatchingIndex( uint64 p_datTimestamp, uint64 p_datFingerprint, uint64 p_datFileSize ) const {
+        auto candidates = this->collectIndexCandidates( );
+        wxString bestPath;
+        uint64 bestIndexedAt = 0;
+
+        for ( size_t i = 0; i < candidates.GetCount( ); i++ ) {
+            const auto& candidate = candidates[i];
+            DatIndexMetadata metadata;
+            if ( !peekIndexMetadata( candidate, metadata ) ) {
+                continue;
+            }
+            if ( !metadata.isAssociatedWithPath( m_datPathCrc, candidate ) ) {
+                continue;
+            }
+            if ( !metadata.matchesDat( p_datFingerprint, p_datTimestamp, p_datFileSize, m_datPathCrc ) ) {
+                continue;
+            }
+
+            uint64 candidateIndexedAt = metadata.indexedAt != 0 ? metadata.indexedAt : indexedAtFromFilename( candidate );
+            if ( bestPath.IsEmpty( ) || candidateIndexedAt >= bestIndexedAt ) {
+                bestPath = candidate;
+                bestIndexedAt = candidateIndexedAt;
+            }
+        }
+
+        return bestPath;
+    }
+
+    //============================================================================/
+
+    wxString BrowserWindow::allocateNewIndexPath( ) const {
+        auto indexedAt = currentTimeMillis( );
+        auto indexFileName = wxString::Format( wxT( "%x_%llu.idx" ), m_datPathCrc, indexedAt );
+        return wxFileName( this->indexStorageDir( ).GetPath( ), indexFileName ).GetFullPath( );
+    }
+
+    //============================================================================/
+
+    void BrowserWindow::stampIndexMetadata( ) {
+        m_index->setDatTimestamp( wxFileModificationTime( m_datPath ) );
+        m_index->setDatFingerprint( m_datFile.fingerprint( ) );
+        m_index->setDatFileSize( static_cast<uint64>( wxFileName( m_datPath ).GetSize( ).GetValue( ) ) );
+        m_index->setDatPathCrc( m_datPathCrc );
+
+        if ( m_index->indexedAt( ) == 0 ) {
+            auto indexedAt = indexedAtFromFilename( m_activeIndexPath );
+            if ( indexedAt == 0 ) {
+                indexedAt = currentTimeMillis( );
+            }
+            m_index->setIndexedAt( indexedAt );
+        }
     }
 
     //============================================================================/
 
     void BrowserWindow::indexDat( ) {
-        // Stamp the current .dat fingerprint so it is persisted when the index
-        // is written after scanning.
-        m_index->setDatFingerprint( m_datFile.fingerprint( ) );
+        this->stampIndexMetadata( );
         auto scanTask = new ScanDatTask( m_index, m_datFile );
         scanTask->addOnCompleteHandler( [this] ( ) { this->onScanTaskComplete( ); } );
         this->performTask( scanTask );
@@ -510,9 +627,15 @@ namespace gw2b {
     //============================================================================/
 
     void BrowserWindow::reIndexDat( ) {
+        if ( m_activeIndexPath.IsEmpty( ) ) {
+            m_activeIndexPath = this->allocateNewIndexPath( );
+        }
+
         m_index->clear( );
-        m_index->setDatTimestamp( wxFileModificationTime( m_datPath ) );
-        this->indexDat( );
+        this->stampIndexMetadata( );
+        auto scanTask = new ScanDatTask( m_index, m_datFile );
+        scanTask->addOnCompleteHandler( [this] ( ) { this->onScanTaskComplete( ); } );
+        this->performTask( scanTask );
     }
 
     //============================================================================/
@@ -576,13 +699,10 @@ namespace gw2b {
         }
 
         // Add a write task if the index is dirty
-        if ( !m_currentTask && m_index->isDirty( ) ) {
-            auto indexPath = this->findDatIndex( );
-            if ( !indexPath.DirExists( ) ) {
-                indexPath.Mkdir( 511, wxPATH_MKDIR_FULL );
-            }
+        if ( !m_currentTask && m_index->isDirty( ) && !m_activeIndexPath.IsEmpty( ) ) {
+            ensureDirectoryExists( this->indexStorageDir( ) );
 
-            auto writeTask = new WriteIndexTask( m_index, indexPath.GetFullPath( ) );
+            auto writeTask = new WriteIndexTask( m_index, m_activeIndexPath );
             writeTask->addOnCompleteHandler( [this] ( ) { this->onWriteTaskCloseCompleted( ); } );
             if ( this->performTask( writeTask ) ) {
                 this->Disable( );
@@ -709,7 +829,7 @@ namespace gw2b {
         }
 
         // Pick the other (typically older) index file to compare against.
-        auto idxDir = this->findDatIndex( );
+        auto idxDir = this->indexStorageDir( );
         wxFileDialog dialog( this, wxT( "Select an index file to compare against (e.g. an older index)" ),
             idxDir.GetPath( ), wxEmptyString,
             wxT( "Gw2Browser index (*.idx)|*.idx|All files (*.*)|*.*" ),
@@ -922,9 +1042,11 @@ namespace gw2b {
         if ( !isComplete ) {
             this->indexDat( );
         } else {
-            // Upgrade older indexes (or refresh) with the current .dat fingerprint
-            // so it is persisted on the next save.
-            m_index->setDatFingerprint( m_datFile.fingerprint( ) );
+            bool needsUpgrade = ( m_index->datPathCrc( ) == 0 || m_index->indexedAt( ) == 0 );
+            this->stampIndexMetadata( );
+            if ( needsUpgrade ) {
+                m_index->setDirty( true );
+            }
             m_catTree->refreshAfterBulkUpdate( );
         }
     }
@@ -934,7 +1056,8 @@ namespace gw2b {
     void BrowserWindow::onScanTaskComplete( ) {
         m_catTree->refreshAfterBulkUpdate( );
 
-        auto writeTask = new WriteIndexTask( m_index, this->findDatIndex( ).GetFullPath( ) );
+        ensureDirectoryExists( this->indexStorageDir( ) );
+        auto writeTask = new WriteIndexTask( m_index, m_activeIndexPath );
         this->performTask( writeTask );
     }
 

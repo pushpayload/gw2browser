@@ -28,6 +28,149 @@
 
 namespace gw2b {
 
+    namespace {
+
+        const size_t MIN_HEADER_SIZE = sizeof( DatIndexHead );
+        const size_t MIN_V3_SIZE = MIN_HEADER_SIZE + sizeof( uint64 );
+        const size_t MIN_V4_SIZE = MIN_V3_SIZE + sizeof( uint32 ) + sizeof( uint64 ) + sizeof( uint64 );
+
+        bool readMetadataFields( wxFile& p_file, const DatIndexHead& p_header, DatIndexMetadata& p_metadata ) {
+            p_metadata.version = p_header.version;
+            p_metadata.datTimestamp = p_header.datTimestamp;
+            p_metadata.numEntries = p_header.numEntries;
+
+            if ( p_header.version >= DatIndex_VersionFingerprint ) {
+                if ( p_file.Read( &p_metadata.datFingerprint, sizeof( p_metadata.datFingerprint ) )
+                    < static_cast<ssize_t>( sizeof( p_metadata.datFingerprint ) ) ) {
+                    return false;
+                }
+            }
+
+            if ( p_header.version >= DatIndex_VersionExtended ) {
+                if ( p_file.Read( &p_metadata.datPathCrc, sizeof( p_metadata.datPathCrc ) )
+                    < static_cast<ssize_t>( sizeof( p_metadata.datPathCrc ) ) ) {
+                    return false;
+                }
+                if ( p_file.Read( &p_metadata.datFileSize, sizeof( p_metadata.datFileSize ) )
+                    < static_cast<ssize_t>( sizeof( p_metadata.datFileSize ) ) ) {
+                    return false;
+                }
+                if ( p_file.Read( &p_metadata.indexedAt, sizeof( p_metadata.indexedAt ) )
+                    < static_cast<ssize_t>( sizeof( p_metadata.indexedAt ) ) ) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        size_t minimumMetadataSize( uint16 p_version ) {
+            if ( p_version >= DatIndex_VersionExtended ) {
+                return MIN_V4_SIZE;
+            }
+            if ( p_version >= DatIndex_VersionFingerprint ) {
+                return MIN_V3_SIZE;
+            }
+            return MIN_HEADER_SIZE;
+        }
+
+        bool writeExtendedFields( wxFile& p_file, const DatIndex& p_index ) {
+            uint64 datFingerprint = p_index.datFingerprint( );
+            auto bytesWritten = p_file.Write( &datFingerprint, sizeof( datFingerprint ) );
+            if ( bytesWritten < static_cast<ssize_t>( sizeof( datFingerprint ) ) ) {
+                return false;
+            }
+
+            uint32 datPathCrc = p_index.datPathCrc( );
+            bytesWritten = p_file.Write( &datPathCrc, sizeof( datPathCrc ) );
+            if ( bytesWritten < static_cast<ssize_t>( sizeof( datPathCrc ) ) ) {
+                return false;
+            }
+
+            uint64 datFileSize = p_index.datFileSize( );
+            bytesWritten = p_file.Write( &datFileSize, sizeof( datFileSize ) );
+            if ( bytesWritten < static_cast<ssize_t>( sizeof( datFileSize ) ) ) {
+                return false;
+            }
+
+            uint64 indexedAt = p_index.indexedAt( );
+            bytesWritten = p_file.Write( &indexedAt, sizeof( indexedAt ) );
+            if ( bytesWritten < static_cast<ssize_t>( sizeof( indexedAt ) ) ) {
+                return false;
+            }
+
+            return true;
+        }
+
+        void applyMetadataToIndex( const DatIndexMetadata& p_metadata, DatIndex& p_index ) {
+            p_index.setDatTimestamp( p_metadata.datTimestamp );
+            p_index.setDatFingerprint( p_metadata.datFingerprint );
+            p_index.setDatPathCrc( p_metadata.datPathCrc );
+            p_index.setDatFileSize( p_metadata.datFileSize );
+            p_index.setIndexedAt( p_metadata.indexedAt );
+        }
+
+    } // namespace
+
+    bool DatIndexMetadata::matchesDat( uint64 p_fingerprint, uint64 p_timestamp, uint64 p_fileSize, uint32 p_pathCrc ) const {
+        if ( datPathCrc != 0 && datPathCrc != p_pathCrc ) {
+            return false;
+        }
+        if ( datFingerprint != 0 && p_fingerprint != 0 ) {
+            return datFingerprint == p_fingerprint;
+        }
+        if ( datTimestamp != p_timestamp ) {
+            return false;
+        }
+        if ( datFileSize != 0 && p_fileSize != 0 ) {
+            return datFileSize == p_fileSize;
+        }
+        return true;
+    }
+
+    bool DatIndexMetadata::isAssociatedWithPath( uint32 p_pathCrc, const wxString& p_filename ) const {
+        if ( datPathCrc != 0 ) {
+            return datPathCrc == p_pathCrc;
+        }
+
+        wxFileName fileName( p_filename );
+        auto name = fileName.GetName( );
+        auto prefix = wxString::Format( wxT( "%x" ), p_pathCrc );
+        if ( name == prefix ) {
+            return true;
+        }
+        return name.StartsWith( prefix + wxT( "_" ) );
+    }
+
+    bool peekIndexMetadata( const wxString& p_filename, DatIndexMetadata& p_metadata ) {
+        p_metadata = DatIndexMetadata( );
+
+        if ( !wxFile::Exists( p_filename ) ) {
+            return false;
+        }
+
+        wxFile file;
+        if ( !file.Open( p_filename ) ) {
+            return false;
+        }
+
+        DatIndexHead header;
+        if ( file.Read( &header, sizeof( header ) ) < static_cast<ssize_t>( sizeof( header ) ) ) {
+            return false;
+        }
+        if ( header.magicInteger != DatIndex_Magic ) {
+            return false;
+        }
+        if ( header.version < DatIndex_MinVersion || header.version > DatIndex_Version ) {
+            return false;
+        }
+        if ( static_cast<size_t>( file.Length( ) ) < minimumMetadataSize( header.version ) ) {
+            return false;
+        }
+
+        return readMetadataFields( file, header, p_metadata );
+    }
+
     //----------------------------------------------------------------------------
     //      DatIndexReader
     //----------------------------------------------------------------------------
@@ -57,17 +200,20 @@ namespace gw2b {
             if ( m_header.version < DatIndex_MinVersion || m_header.version > DatIndex_Version ) {
                 this->close( ); return false;
             }
-            // Versions at or above DatIndex_VersionFingerprint store a .dat
-            // fingerprint immediately after the fixed-width header.
-            uint64 datFingerprint = 0;
-            if ( m_header.version >= DatIndex_VersionFingerprint ) {
-                if ( m_file.Read( &datFingerprint, sizeof( datFingerprint ) ) < static_cast<ssize_t>( sizeof( datFingerprint ) ) ) {
-                    this->close( ); return false;
-                }
+            if ( static_cast<size_t>( m_file.Length( ) ) < minimumMetadataSize( m_header.version ) ) {
+                this->close( ); return false;
             }
+
+            DatIndexMetadata metadata;
+            metadata.version = m_header.version;
+            metadata.datTimestamp = m_header.datTimestamp;
+            metadata.numEntries = m_header.numEntries;
+            if ( !readMetadataFields( m_file, m_header, metadata ) ) {
+                this->close( ); return false;
+            }
+
             m_index.clear( ); // always start with a fresh index
-            m_index.setDatTimestamp( m_header.datTimestamp );
-            m_index.setDatFingerprint( datFingerprint );
+            applyMetadataToIndex( metadata, m_index );
             m_index.reserveEntries( m_header.numEntries );
             m_index.reserveCategories( m_header.numCategories );
             return true;
@@ -192,10 +338,7 @@ namespace gw2b {
                 this->close( ); return false;
             }
 
-            // Write the .dat fingerprint right after the header (version 0x3+).
-            uint64 datFingerprint = m_index.datFingerprint( );
-            bytesWritten = m_file.Write( &datFingerprint, sizeof( datFingerprint ) );
-            if ( bytesWritten < sizeof( datFingerprint ) ) {
+            if ( !writeExtendedFields( m_file, m_index ) ) {
                 this->close( ); return false;
             }
 

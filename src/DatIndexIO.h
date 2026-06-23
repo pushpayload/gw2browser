@@ -38,11 +38,34 @@ namespace gw2b {
 
     enum DatIndexMagicNumber {
         DatIndex_Magic = 0x4944,
-        DatIndex_Version = 0x3,             /**< Current index format version (written by this build). */
+        DatIndex_Version = 0x4,             /**< Current index format version (written by this build). */
         DatIndex_MinVersion = 0x2,          /**< Oldest index format version we can still read. */
         DatIndex_VersionFingerprint = 0x3,  /**< First version to store the .dat fingerprint after the header. */
+        DatIndex_VersionExtended = 0x4,     /**< First version to store path CRC, file size, and indexed-at time. */
         DatIndex_RootCategory = -0x1,
     };
+
+    /** Metadata read from an index file header without loading the full index. */
+    struct DatIndexMetadata {
+        uint16  version = 0;
+        uint64  datTimestamp = 0;
+        uint64  datFingerprint = 0;
+        uint32  datPathCrc = 0;
+        uint64  datFileSize = 0;
+        uint64  indexedAt = 0;
+        uint32  numEntries = 0;
+
+        /** Returns true if this index describes the given .dat state. */
+        bool matchesDat( uint64 p_fingerprint, uint64 p_timestamp, uint64 p_fileSize, uint32 p_pathCrc ) const;
+        /** Returns true if the index file belongs to the given .dat path CRC. */
+        bool isAssociatedWithPath( uint32 p_pathCrc, const wxString& p_filename ) const;
+    };
+
+    /** Reads only the header metadata from an index file.
+    *  \param[in]  p_filename   Index file to inspect.
+    *  \param[out] p_metadata   Populated metadata on success.
+    *  \return bool    true if the file is a readable index header. */
+    bool peekIndexMetadata( const wxString& p_filename, DatIndexMetadata& p_metadata );
 
 #pragma pack(push, 1)
 

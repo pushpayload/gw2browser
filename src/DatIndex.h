@@ -295,6 +295,9 @@ namespace gw2b {
         CategoryArray       m_categories;
         uint64              m_datTimestamp;
         uint64              m_datFingerprint;
+        uint32              m_datPathCrc;
+        uint64              m_datFileSize;
+        uint64              m_indexedAt;
         EntryArray          m_entries;
         BaseIdMap           m_entriesByBaseId;
         int                 m_highestMftEntry;
@@ -422,6 +425,39 @@ namespace gw2b {
         *  \param[in]  p_fingerprint    .dat content fingerprint. */
         void setDatFingerprint( uint64 p_fingerprint ) {
             m_datFingerprint = p_fingerprint;
+        }
+
+        /** Gets the .dat path CRC stored for this index.
+        *  \return uint32  CRC of the indexed .dat path, 0 if unknown. */
+        uint32 datPathCrc( ) const {
+            return m_datPathCrc;
+        }
+        /** Sets the .dat path CRC stored for this index.
+        *  \param[in]  p_pathCrc    CRC of the indexed .dat path. */
+        void setDatPathCrc( uint32 p_pathCrc ) {
+            m_datPathCrc = p_pathCrc;
+        }
+
+        /** Gets the .dat file size stored for this index.
+        *  \return uint64  .dat file size in bytes, 0 if unknown. */
+        uint64 datFileSize( ) const {
+            return m_datFileSize;
+        }
+        /** Sets the .dat file size stored for this index.
+        *  \param[in]  p_fileSize   .dat file size in bytes. */
+        void setDatFileSize( uint64 p_fileSize ) {
+            m_datFileSize = p_fileSize;
+        }
+
+        /** Gets the time this index was created, in UTC milliseconds since epoch.
+        *  \return uint64  Indexed-at timestamp, 0 if unknown. */
+        uint64 indexedAt( ) const {
+            return m_indexedAt;
+        }
+        /** Sets the time this index was created.
+        *  \param[in]  p_indexedAt  UTC milliseconds since epoch. */
+        void setIndexedAt( uint64 p_indexedAt ) {
+            m_indexedAt = p_indexedAt;
         }
 
         /** Adds an event listener to this object.
